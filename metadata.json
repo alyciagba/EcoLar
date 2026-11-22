@@ -1,0 +1,6 @@
+{
+  "name": "Ecolar",
+  "description": "Copiloto inteligente para tornar obras mais sustentáveis, econômicas e organizadas desde o diagnóstico até o acompanhamento diário.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
