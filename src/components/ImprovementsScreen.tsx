@@ -5,11 +5,13 @@ import { formatBRL, formatNumberBR } from "../utils/formatters";
 
 interface ImprovementsScreenProps {
   improvements: ImprovementItem[];
+  isProjectSetup: boolean;
   onTogglePlan: (id: string) => void;
 }
 
 export function ImprovementsScreen({
   improvements,
+  isProjectSetup,
   onTogglePlan,
 }: ImprovementsScreenProps) {
   const [priorityFilter, setPriorityFilter] = useState<string>("todas");
@@ -39,7 +41,9 @@ export function ImprovementsScreen({
             Ranking de Melhorias
           </h1>
           <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-            Soluções práticas ordenadas por economia real, impacto ambiental e facilidade de execução.
+            {isProjectSetup && improvements.length === 0
+              ? "As melhorias e estimativas estarão disponíveis após informar os dados técnicos da obra."
+              : "Soluções práticas ordenadas por economia real, impacto ambiental e facilidade de execução."}
           </p>
         </div>
 
@@ -47,21 +51,27 @@ export function ImprovementsScreen({
           <div>
             <p className="text-xs text-slate-500 dark:text-slate-400">No plano da obra</p>
             <p className="text-base font-bold font-mono text-slate-900 dark:text-slate-100 tabular-nums">
-              {inPlan.length} de {improvements.length} soluções
+              {isProjectSetup && improvements.length === 0
+                ? "Ainda não disponível"
+                : `${inPlan.length} de ${improvements.length} soluções`}
             </p>
           </div>
           <div className="h-8 w-px bg-slate-200 dark:bg-slate-800 hidden sm:block" />
           <div>
             <p className="text-xs text-slate-500 dark:text-slate-400">Investimento estimado</p>
             <p className="text-base font-bold font-mono text-slate-900 dark:text-slate-100 tabular-nums">
-              {formatBRL(totalPlannedCost)}
+              {isProjectSetup && improvements.length === 0
+                ? "Ainda não disponível"
+                : formatBRL(totalPlannedCost)}
             </p>
           </div>
           <div className="h-8 w-px bg-slate-200 dark:bg-slate-800 hidden sm:block" />
           <div>
             <p className="text-xs text-slate-500 dark:text-slate-400">Economia projetada</p>
             <p className="text-base font-bold font-mono text-emerald-700 dark:text-emerald-400 tabular-nums">
-              {formatBRL(totalPlannedEconomy)}
+              {isProjectSetup && improvements.length === 0
+                ? "Ainda não disponível"
+                : formatBRL(totalPlannedEconomy)}
             </p>
           </div>
         </div>
@@ -149,19 +159,23 @@ export function ImprovementsScreen({
       {filtered.length === 0 ? (
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-8 text-center">
           <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
-            Nenhuma solução encontrada com esses filtros.
+            {isProjectSetup && improvements.length === 0
+              ? "Nenhuma melhoria foi registrada. As recomendações ainda não estão disponíveis para esta obra."
+              : "Nenhuma solução encontrada com esses filtros."}
           </p>
-          <button
-            type="button"
-            onClick={() => {
-              setPriorityFilter("todas");
-              setCostFilter("todos");
-              setImpactFilter("todos");
-            }}
-            className="mt-3 px-4 py-2 text-xs font-medium text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-950 rounded-lg cursor-pointer"
-          >
-            Limpar filtros
-          </button>
+          {!(isProjectSetup && improvements.length === 0) && (
+            <button
+              type="button"
+              onClick={() => {
+                setPriorityFilter("todas");
+                setCostFilter("todos");
+                setImpactFilter("todos");
+              }}
+              className="mt-3 px-4 py-2 text-xs font-medium text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-950 rounded-lg cursor-pointer"
+            >
+              Limpar filtros
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">

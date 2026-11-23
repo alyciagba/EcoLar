@@ -6,14 +6,29 @@ import { formatBRL, STAGE_OPTIONS } from "../utils/formatters";
 interface ExpensesScreenProps {
   expenses: ExpenseItem[];
   stageBudgets: StageBudget[];
-  totalBudget: number;
+  totalBudget: number | null;
+  isProjectSetup: boolean;
   onAddExpense: (expense: ExpenseItem) => void;
+}
+
+const EXPENSE_CATEGORIES = [
+  "Estrutura",
+  "Alvenaria",
+  "Impermeabilizacao",
+  "Cobertura",
+  "Hidraulica e Eletrica",
+  "Acabamento",
+] as const satisfies readonly ExpenseItem["categoria"][];
+
+function isExpenseCategory(value: string): value is ExpenseItem["categoria"] {
+  return EXPENSE_CATEGORIES.some((category) => category === value);
 }
 
 export function ExpensesScreen({
   expenses,
   stageBudgets,
   totalBudget,
+  isProjectSetup,
   onAddExpense,
 }: ExpensesScreenProps) {
   const [showForm, setShowForm] = useState(false);
@@ -21,17 +36,22 @@ export function ExpensesScreen({
   const [fornecedor, setFornecedor] = useState("");
   const [valorPago, setValorPago] = useState("");
   const [quantidade, setQuantidade] = useState("");
-  const [unidade, setUnidade] = useState("unidades");
-  const [categoria, setCategoria] =
-    useState<ExpenseItem["categoria"]>("Alvenaria");
-  const [etapa, setEtapa] = useState("Alvenaria e Estrutura");
+  const [unidade, setUnidade] = useState(isProjectSetup ? "" : "unidades");
+  const [categoria, setCategoria] = useState<ExpenseItem["categoria"] | "">(
+    isProjectSetup ? "" : "Alvenaria"
+  );
+  const [etapa, setEtapa] = useState(
+    isProjectSetup ? "" : "Alvenaria e Estrutura"
+  );
   const [riscoDesperdicioAlto, setRiscoDesperdicioAlto] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const totalSpent = useMemo(
     () => expenses.reduce((s, e) => s + e.valorPago, 0),
     [expenses]
   );
-  const remaining = totalBudget - totalSpent;
+  const remaining =
+    totalBudget === null ? null : totalBudget - totalSpent;
 
   const mostExpensiveStage = useMemo(() => {
     return [...stageBudgets].sort((a, b) => b.realizado - a.realizado)[0];
@@ -41,25 +61,59 @@ export function ExpensesScreen({
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (!material.trim() || !valorPago) return;
+    const paidAmount = Number(valorPago);
+    const quantity = Number(quantidade);
+    if (
+      !material.trim() ||
+      !valorPago ||
+      !Number.isFinite(paidAmount) ||
+      paidAmount <= 0 ||
+      (isProjectSetup &&
+        (!Number.isFinite(quantity) ||
+          quantity <= 0 ||
+          !unidade.trim() ||
+        !isExpenseCategory(categoria)))
+    ) {
+      setFormError(
+        "Informe os dados reais da compra: material, valor, quantidade, unidade e categoria."
+      );
+      return;
+    }
+    if (!isExpenseCategory(categoria)) {
+      setFormError("Selecione uma categoria válida para a compra.");
+      return;
+    }
+    setFormError(null);
 
     const newItem: ExpenseItem = {
       id: `exp-${Date.now()}`,
       data: new Date().toISOString().slice(0, 10),
       material: material.trim(),
-      fornecedor: fornecedor.trim() || "Fornecedor local",
-      valorPago: Number(valorPago) || 0,
-      quantidade: Number(quantidade) || 1,
-      unidade: unidade.trim() || "un",
+      fornecedor: isProjectSetup
+        ? fornecedor.trim()
+        : fornecedor.trim() || "Fornecedor local",
+      valorPago: paidAmount,
+      quantidade: isProjectSetup ? quantity : Number(quantidade) || 1,
+      unidade: isProjectSetup ? unidade.trim() : unidade.trim() || "un",
       categoria,
       etapa,
-      riscoDesperdicioAlto,
+      ...(isProjectSetup
+        ? riscoDesperdicioAlto
+          ? { riscoDesperdicioAlto: true }
+          : {}
+        : { riscoDesperdicioAlto }),
     };
     onAddExpense(newItem);
     setMaterial("");
     setFornecedor("");
     setValorPago("");
     setQuantidade("");
+    if (isProjectSetup) {
+      setUnidade("");
+      setCategoria("");
+      setEtapa("");
+      setRiscoDesperdicioAlto(false);
+    }
     setShowForm(false);
   };
 
@@ -90,12 +144,16 @@ export function ExpensesScreen({
       {/* 5 Cards obrigatórios */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
-          <p className="text-xs text-slate-500 dark:text-slate-400">Total gasto</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            {isProjectSetup ? "Gastos registrados" : "Total gasto"}
+          </p>
           <p className="mt-1 text-xl font-bold font-mono text-slate-900 dark:text-slate-100 tabular-nums">
             {formatBRL(totalSpent)}
           </p>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-mono tabular-nums">
-            De {formatBRL(totalBudget)} previstos
+            {totalBudget === null
+              ? "Orçamento ainda não informado"
+              : `De ${formatBRL(totalBudget)} previstos`}
           </p>
         </div>
 
@@ -103,49 +161,81 @@ export function ExpensesScreen({
           <p className="text-xs text-slate-500 dark:text-slate-400">Saldo restante</p>
           <p
             className={`mt-1 text-xl font-bold font-mono tabular-nums ${
-              remaining < 0
+              remaining !== null && remaining < 0
                 ? "text-red-700 dark:text-red-400"
-                : "text-emerald-700 dark:text-emerald-400"
+                : remaining === null
+                  ? "text-slate-500 dark:text-slate-400"
+                  : "text-emerald-700 dark:text-emerald-400"
             }`}
           >
-            {formatBRL(remaining)}
+            {remaining === null ? "Não disponível" : formatBRL(remaining)}
           </p>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            {remaining < 0 ? "Orçamento estourado" : "Dentro do limite planejado"}
+            {remaining === null
+              ? "Informe o orçamento para calcular o saldo"
+              : remaining < 0
+                ? "Orçamento estourado"
+                : "Dentro do limite planejado"}
           </p>
         </div>
 
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
           <p className="text-xs text-slate-500 dark:text-slate-400">Etapa mais cara</p>
           <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">
-            {mostExpensiveStage?.etapa ?? "—"}
+            {mostExpensiveStage?.etapa ??
+              (isProjectSetup ? "Ainda não informada" : "—")}
           </p>
           <p className="text-xs font-mono text-slate-600 dark:text-slate-400 mt-1 tabular-nums">
-            {formatBRL(mostExpensiveStage?.realizado ?? 0)} gastos
+            {mostExpensiveStage
+              ? `${formatBRL(mostExpensiveStage.realizado)} gastos`
+              : isProjectSetup
+                ? "Sem orçamento por etapa registrado"
+                : `${formatBRL(0)} gastos`}
           </p>
         </div>
 
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Maior oportunidade de economia
+            {isProjectSetup
+              ? "Indicador de economia"
+              : "Maior oportunidade de economia"}
           </p>
-          <p className="mt-1 text-sm font-semibold text-emerald-800 dark:text-emerald-400">
-            Compra planejada + reúso de portas
-          </p>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-mono tabular-nums">
-            Até {formatBRL(4750)} potenciais
-          </p>
+          {isProjectSetup ? (
+            <>
+              <p className="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-300">
+                Ainda indisponível
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                Não há dados suficientes para estimar economias.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="mt-1 text-sm font-semibold text-emerald-800 dark:text-emerald-400">
+                Compra planejada + reúso de portas
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-mono tabular-nums">
+                Até {formatBRL(4750)} potenciais
+              </p>
+            </>
+          )}
         </div>
 
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Materiais com maior consumo
+            {isProjectSetup
+              ? "Compra mais recente"
+              : "Materiais com maior consumo"}
           </p>
           <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">
-            Cimento CP-II, Areia e Aço CA-50
+            {isProjectSetup
+              ? expenses[0]?.material ?? "Ainda não informada"
+              : "Cimento CP-II, Areia e Aço CA-50"}
           </p>
           <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
-            {highWasteExpenses.length} itens com alerta de perda
+            {isProjectSetup
+              ? `${expenses.length} compras registradas`
+              : `${highWasteExpenses.length} itens com alerta de perda`}
           </p>
         </div>
       </div>
@@ -158,6 +248,21 @@ export function ExpensesScreen({
           <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
             Nova compra de material
           </h2>
+          {isProjectSetup && (
+            <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+              Registre somente os dados conhecidos. O fornecedor é opcional; a
+              quantidade, a unidade e a categoria precisam ser informadas. A etapa
+              é opcional.
+            </p>
+          )}
+          {formError && (
+            <p
+              className="rounded-lg bg-red-50 p-3 text-sm text-red-800 dark:bg-red-950/40 dark:text-red-200"
+              role="alert"
+            >
+              {formError}
+            </p>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
@@ -209,6 +314,7 @@ export function ExpensesScreen({
                 <input
                   type="number"
                   min={1}
+                  required={isProjectSetup}
                   value={quantidade}
                   onChange={(e) => setQuantidade(e.target.value)}
                   placeholder="12"
@@ -216,6 +322,7 @@ export function ExpensesScreen({
                 />
                 <input
                   type="text"
+                  required={isProjectSetup}
                   value={unidade}
                   onChange={(e) => setUnidade(e.target.value)}
                   placeholder="sacos, m³, un"
@@ -230,17 +337,25 @@ export function ExpensesScreen({
               </label>
               <select
                 value={categoria}
-                onChange={(e) =>
-                  setCategoria(e.target.value as ExpenseItem["categoria"])
-                }
+                required={isProjectSetup}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setCategoria(isExpenseCategory(value) ? value : "");
+                }}
                 className={inputClass}
               >
-                <option value="Estrutura">Estrutura</option>
-                <option value="Alvenaria">Alvenaria</option>
-                <option value="Impermeabilizacao">Impermeabilização</option>
-                <option value="Cobertura">Cobertura</option>
-                <option value="Hidraulica e Eletrica">Hidráulica e Elétrica</option>
-                <option value="Acabamento">Acabamento</option>
+                {isProjectSetup && (
+                  <option value="">Selecione uma categoria</option>
+                )}
+                {EXPENSE_CATEGORIES.map((itemCategory) => (
+                  <option key={itemCategory} value={itemCategory}>
+                    {itemCategory === "Impermeabilizacao"
+                      ? "Impermeabilização"
+                      : itemCategory === "Hidraulica e Eletrica"
+                        ? "Hidráulica e Elétrica"
+                        : itemCategory}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -253,6 +368,9 @@ export function ExpensesScreen({
                 onChange={(e) => setEtapa(e.target.value)}
                 className={inputClass}
               >
+                {isProjectSetup && (
+                  <option value="">Ainda não informada</option>
+                )}
                 {STAGE_OPTIONS.map((s) => (
                   <option key={s} value={s}>
                     {s}
@@ -269,7 +387,9 @@ export function ExpensesScreen({
               onChange={(e) => setRiscoDesperdicioAlto(e.target.checked)}
               className="w-4 h-4 accent-amber-700 rounded"
             />
-            Marcar como material sensível a chuva/desperdício (cimento, areia, argamassa)
+            {isProjectSetup
+              ? "Sinalizar como material sensível a chuva/desperdício"
+              : "Marcar como material sensível a chuva/desperdício (cimento, areia, argamassa)"}
           </label>
 
           <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
@@ -306,7 +426,16 @@ export function ExpensesScreen({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-sm">
-              {stageBudgets.map((sb) => {
+              {isProjectSetup && stageBudgets.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={4}
+                    className="py-6 text-center text-sm text-slate-500 dark:text-slate-400"
+                  >
+                    Nenhum orçamento por etapa foi informado.
+                  </td>
+                </tr>
+              ) : stageBudgets.map((sb) => {
                 const diff = sb.previsto - sb.realizado;
                 const over = diff < 0;
                 return (
@@ -389,9 +518,11 @@ export function ExpensesScreen({
                       )}
                     </td>
                     <td className="py-3 px-4 text-slate-600 dark:text-slate-400">
-                      {exp.fornecedor}
+                      {exp.fornecedor || "Fornecedor não informado"}
                     </td>
-                    <td className="py-3 px-4 text-slate-600 dark:text-slate-400">{exp.etapa}</td>
+                    <td className="py-3 px-4 text-slate-600 dark:text-slate-400">
+                      {exp.etapa || "Etapa não informada"}
+                    </td>
                     <td className="py-3 px-4 text-right font-mono text-xs text-slate-700 dark:text-slate-300 tabular-nums">
                       {exp.quantidade} {exp.unidade}
                     </td>

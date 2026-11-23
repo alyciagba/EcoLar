@@ -7,6 +7,7 @@ import { SafeConstructionImage } from "./SafeConstructionImage";
 interface DiaryScreenProps {
   entries: DiaryEntry[];
   stageBudgets: StageBudget[];
+  isProjectSetup: boolean;
   showNewModal: boolean;
   onSetShowNewModal: (open: boolean) => void;
   onAddEntry: (entry: DiaryEntry) => void;
@@ -31,9 +32,32 @@ const SAMPLE_PHOTOS = [
   },
 ];
 
+function isDiaryClimate(value: string): value is DiaryEntry["climaDoDia"] {
+  return (
+    value === "Nao informado" ||
+    value === "Ensolarado" ||
+    value === "Nublado" ||
+    value === "Chuvoso" ||
+    value === "Vento forte"
+  );
+}
+
+function isDiaryWasteLevel(
+  value: string
+): value is DiaryEntry["desperdicioPercebido"] {
+  return (
+    value === "Nao informado" ||
+    value === "Nenhum relevante" ||
+    value === "Baixo" ||
+    value === "Medio" ||
+    value === "Alto"
+  );
+}
+
 export function DiaryScreen({
   entries,
   stageBudgets,
+  isProjectSetup,
   showNewModal,
   onSetShowNewModal,
   onAddEntry,
@@ -42,18 +66,29 @@ export function DiaryScreen({
     "timeline" | "galeria" | "gastos" | "problemas" | "comparacao"
   >("timeline");
 
-  const [etapaConcluida, setEtapaConcluida] = useState("Impermeabilização");
+  const [etapaConcluida, setEtapaConcluida] = useState(
+    isProjectSetup ? "" : "Impermeabilização"
+  );
   const [materiaisComprados, setMateriaisComprados] = useState("");
   const [quantidadeMateriais, setQuantidadeMateriais] = useState("");
   const [valorGasto, setValorGasto] = useState("");
-  const [maoDeObra, setMaoDeObra] = useState("1 pedreiro + 1 ajudante");
-  const [problemasEncontrados, setProblemasEncontrados] = useState("Nenhum");
+  const [maoDeObra, setMaoDeObra] = useState(
+    isProjectSetup ? "" : "1 pedreiro + 1 ajudante"
+  );
+  const [problemasEncontrados, setProblemasEncontrados] = useState(
+    isProjectSetup ? "" : "Nenhum"
+  );
   const [desperdicioPercebido, setDesperdicioPercebido] = useState<
     DiaryEntry["desperdicioPercebido"]
-  >("Nenhum relevante");
-  const [climaDoDia, setClimaDoDia] = useState<DiaryEntry["climaDoDia"]>("Ensolarado");
+  >(isProjectSetup ? "Nao informado" : "Nenhum relevante");
+  const [climaDoDia, setClimaDoDia] = useState<DiaryEntry["climaDoDia"]>(
+    isProjectSetup ? "Nao informado" : "Ensolarado"
+  );
   const [observacoes, setObservacoes] = useState("");
-  const [fotoUrl, setFotoUrl] = useState<string>(SAMPLE_PHOTOS[0].url);
+  const [fotoUrl, setFotoUrl] = useState<string>(
+    isProjectSetup ? "" : SAMPLE_PHOTOS[0].url
+  );
+  const [formError, setFormError] = useState<string | null>(null);
 
   const handlePhotoUpload = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -69,19 +104,40 @@ export function DiaryScreen({
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    const numericCost = Number(valorGasto) || 0;
+    const numericCost = Number(valorGasto);
+    if (
+      isProjectSetup &&
+      (!valorGasto.trim() || !Number.isFinite(numericCost) || numericCost < 0)
+    ) {
+      setFormError(
+        "Informe o gasto real do dia; use 0 somente se souber que não houve gasto."
+      );
+      return;
+    }
+    setFormError(null);
+    const cost = Number(valorGasto) || 0;
     const baseData: Omit<DiaryEntry, "id" | "resumoAutomatico"> = {
       data: new Date().toISOString().slice(0, 10),
-      etapaConcluida,
-      materiaisComprados: materiaisComprados.trim() || "Sem compra nova no dia",
-      quantidadeMateriais: quantidadeMateriais.trim() || "—",
-      valorGasto: numericCost,
-      maoDeObra: maoDeObra.trim() || "Equipe própria",
-      problemasEncontrados: problemasEncontrados.trim() || "Nenhum",
+      etapaConcluida: etapaConcluida.trim(),
+      materiaisComprados: isProjectSetup
+        ? materiaisComprados.trim()
+        : materiaisComprados.trim() || "Sem compra nova no dia",
+      quantidadeMateriais: isProjectSetup
+        ? quantidadeMateriais.trim()
+        : quantidadeMateriais.trim() || "—",
+      valorGasto: cost,
+      maoDeObra: isProjectSetup
+        ? maoDeObra.trim()
+        : maoDeObra.trim() || "Equipe própria",
+      problemasEncontrados: isProjectSetup
+        ? problemasEncontrados.trim()
+        : problemasEncontrados.trim() || "Nenhum",
       desperdicioPercebido,
       climaDoDia,
-      observacoes: observacoes.trim() || "Registro diário salvo pelo Ecolar.",
-      fotoUrl,
+      observacoes: isProjectSetup
+        ? observacoes.trim()
+        : observacoes.trim() || "Registro diário salvo pelo Ecolar.",
+      ...(fotoUrl ? { fotoUrl } : {}),
     };
 
     const newEntry: DiaryEntry = {
@@ -94,8 +150,15 @@ export function DiaryScreen({
     setMateriaisComprados("");
     setQuantidadeMateriais("");
     setValorGasto("");
-    setProblemasEncontrados("Nenhum");
+    setProblemasEncontrados(isProjectSetup ? "" : "Nenhum");
     setObservacoes("");
+    if (isProjectSetup) {
+      setEtapaConcluida("");
+      setMaoDeObra("");
+      setDesperdicioPercebido("Nao informado");
+      setClimaDoDia("Nao informado");
+      setFotoUrl("");
+    }
     onSetShowNewModal(false);
   };
 
@@ -104,6 +167,9 @@ export function DiaryScreen({
       e.problemasEncontrados.trim() !== "" &&
       e.problemasEncontrados.trim().toLowerCase() !== "nenhum"
   );
+  const galleryEntries = isProjectSetup
+    ? entries.filter((entry) => Boolean(entry.fotoUrl))
+    : entries;
 
   const inputClass =
     "w-full px-3 py-2 text-sm bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-600 placeholder:text-slate-400 dark:placeholder:text-slate-500";
@@ -167,12 +233,18 @@ export function DiaryScreen({
                 className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex flex-col md:flex-row gap-5"
               >
                 <div className="w-full md:w-56 h-44 rounded-lg overflow-hidden shrink-0 border border-slate-200 dark:border-slate-800">
-                  <SafeConstructionImage
-                    src={entry.fotoUrl}
-                    alt={`Foto da etapa ${entry.etapaConcluida}`}
-                    className="w-full h-full object-cover"
-                    fallbackLabel={entry.etapaConcluida}
-                  />
+                  {isProjectSetup && !entry.fotoUrl ? (
+                    <div className="h-full flex items-center justify-center bg-slate-50 text-sm text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                      Foto ainda não informada
+                    </div>
+                  ) : (
+                    <SafeConstructionImage
+                      src={entry.fotoUrl}
+                      alt={`Foto da etapa ${entry.etapaConcluida || "não informada"}`}
+                      className="w-full h-full object-cover"
+                      fallbackLabel={entry.etapaConcluida || "Etapa não informada"}
+                    />
+                  )}
                 </div>
 
                 <div className="flex-1 space-y-3">
@@ -182,12 +254,22 @@ export function DiaryScreen({
                     </span>
                     <span aria-hidden="true">·</span>
                     <span className="font-semibold text-emerald-700 dark:text-emerald-400">
-                      {entry.etapaConcluida}
+                      {entry.etapaConcluida || "Etapa ainda não informada"}
                     </span>
                     <span aria-hidden="true">·</span>
-                    <span>Clima: {entry.climaDoDia}</span>
+                    <span>
+                      Clima:{" "}
+                      {entry.climaDoDia === "Nao informado"
+                        ? "Não informado"
+                        : entry.climaDoDia}
+                    </span>
                     <span aria-hidden="true">·</span>
-                    <span>Desperdício: {entry.desperdicioPercebido}</span>
+                    <span>
+                      Desperdício:{" "}
+                      {entry.desperdicioPercebido === "Nao informado"
+                        ? "Não informado"
+                        : entry.desperdicioPercebido}
+                    </span>
                   </div>
 
                   <p className="text-base font-medium text-slate-900 dark:text-slate-100 leading-snug">
@@ -195,7 +277,7 @@ export function DiaryScreen({
                   </p>
 
                   <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                    {entry.observacoes}
+                    {entry.observacoes || "Ainda não informadas."}
                   </p>
 
                   <div className="pt-3 border-t border-slate-100 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
@@ -204,13 +286,14 @@ export function DiaryScreen({
                         Materiais e quantidade
                       </span>
                       <span className="font-medium text-slate-800 dark:text-slate-200">
-                        {entry.materiaisComprados} ({entry.quantidadeMateriais})
+                        {entry.materiaisComprados || "Ainda não informados"} (
+                        {entry.quantidadeMateriais || "quantidade não informada"})
                       </span>
                     </div>
                     <div>
                       <span className="block text-slate-500 dark:text-slate-400">Mão de obra</span>
                       <span className="font-medium text-slate-800 dark:text-slate-200">
-                        {entry.maoDeObra}
+                        {entry.maoDeObra || "Ainda não informada"}
                       </span>
                     </div>
                     <div>
@@ -231,12 +314,12 @@ export function DiaryScreen({
 
       {activeTab === "galeria" && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {entries.length === 0 ? (
+          {galleryEntries.length === 0 ? (
             <div className="sm:col-span-2 lg:col-span-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-8 text-center text-sm text-slate-600 dark:text-slate-400">
               Nenhuma foto registrada nesta obra ainda.
             </div>
           ) : (
-            entries.map((entry) => (
+            galleryEntries.map((entry) => (
               <figure
                 key={entry.id}
                 className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden"
@@ -251,13 +334,16 @@ export function DiaryScreen({
                 </div>
                 <figcaption className="p-4 space-y-1">
                   <p className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
-                    {entry.data} · {entry.climaDoDia}
+                    {entry.data} ·{" "}
+                    {entry.climaDoDia === "Nao informado"
+                      ? "Clima não informado"
+                      : entry.climaDoDia}
                   </p>
                   <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                    {entry.etapaConcluida}
+                    {entry.etapaConcluida || "Etapa ainda não informada"}
                   </p>
                   <p className="text-xs text-slate-600 dark:text-slate-400 line-clamp-2">
-                    {entry.observacoes}
+                    {entry.observacoes || "Observações ainda não informadas."}
                   </p>
                 </figcaption>
               </figure>
@@ -285,13 +371,16 @@ export function DiaryScreen({
                     {entry.data}
                   </td>
                   <td className="py-3 px-4 font-medium text-slate-900 dark:text-slate-100">
-                    {entry.etapaConcluida}
+                    {entry.etapaConcluida || "Etapa ainda não informada"}
                   </td>
                   <td className="py-3 px-4 text-slate-600 dark:text-slate-400">
-                    {entry.materiaisComprados} ({entry.quantidadeMateriais})
+                    {entry.materiaisComprados || "Ainda não informados"} (
+                    {entry.quantidadeMateriais || "quantidade não informada"})
                   </td>
                   <td className="py-3 px-4 text-slate-600 dark:text-slate-400">
-                    {entry.desperdicioPercebido}
+                    {entry.desperdicioPercebido === "Nao informado"
+                      ? "Não informado"
+                      : entry.desperdicioPercebido}
                   </td>
                   <td className="py-3 px-4 text-right font-mono font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
                     {formatBRL(entry.valorGasto)}
@@ -307,7 +396,9 @@ export function DiaryScreen({
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl divide-y divide-slate-100 dark:divide-slate-800">
           {problemEntries.length === 0 ? (
             <div className="p-8 text-center text-sm text-slate-600 dark:text-slate-400">
-              Nenhum problema registrado até o momento.
+              {isProjectSetup
+                ? "Nenhum problema foi registrado. Isso não significa que a obra foi avaliada e não possui problemas."
+                : "Nenhum problema registrado até o momento."}
             </div>
           ) : (
             problemEntries.map((entry) => (
@@ -340,6 +431,12 @@ export function DiaryScreen({
             </p>
           </div>
           <div className="space-y-4">
+            {isProjectSetup && stageBudgets.length === 0 && (
+              <p className="rounded-lg bg-slate-50 p-4 text-sm text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Os orçamentos por etapa ainda não foram informados. Esta comparação
+                ficará disponível quando houver dados previstos e realizados.
+              </p>
+            )}
             {stageBudgets.map((sb) => {
               const pct = Math.min(100, Math.round((sb.realizado / Math.max(1, sb.previsto)) * 100));
               const over = sb.realizado > sb.previsto;
@@ -402,6 +499,20 @@ export function DiaryScreen({
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
+              {isProjectSetup && (
+                <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+                  Informações não preenchidas serão mostradas como não informadas.
+                  Informe o valor gasto ou 0 se souber que não houve gasto.
+                </p>
+              )}
+              {formError && (
+                <p
+                  className="rounded-lg bg-red-50 p-3 text-sm text-red-800 dark:bg-red-950/40 dark:text-red-200"
+                  role="alert"
+                >
+                  {formError}
+                </p>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
@@ -412,6 +523,9 @@ export function DiaryScreen({
                     onChange={(e) => setEtapaConcluida(e.target.value)}
                     className={inputClass}
                   >
+                    {isProjectSetup && (
+                      <option value="">Etapa ainda não informada</option>
+                    )}
                     {STAGE_OPTIONS.map((s) => (
                       <option key={s} value={s}>
                         {s}
@@ -426,9 +540,16 @@ export function DiaryScreen({
                   </label>
                   <select
                     value={climaDoDia}
-                    onChange={(e) => setClimaDoDia(e.target.value as DiaryEntry["climaDoDia"])}
+                    onChange={(e) => {
+                      if (isDiaryClimate(e.target.value)) {
+                        setClimaDoDia(e.target.value);
+                      }
+                    }}
                     className={inputClass}
                   >
+                    {isProjectSetup && (
+                      <option value="Nao informado">Ainda não informado</option>
+                    )}
                     <option value="Ensolarado">Ensolarado</option>
                     <option value="Nublado">Nublado</option>
                     <option value="Chuvoso">Chuvoso</option>
@@ -470,7 +591,11 @@ export function DiaryScreen({
                     type="number"
                     min={0}
                     value={valorGasto}
-                    onChange={(e) => setValorGasto(e.target.value)}
+                    required={isProjectSetup}
+                    onChange={(e) => {
+                      setValorGasto(e.target.value);
+                      setFormError(null);
+                    }}
                     placeholder="Ex: 780"
                     className={`${inputClass} font-mono tabular-nums`}
                   />
@@ -495,13 +620,16 @@ export function DiaryScreen({
                   </label>
                   <select
                     value={desperdicioPercebido}
-                    onChange={(e) =>
-                      setDesperdicioPercebido(
-                        e.target.value as DiaryEntry["desperdicioPercebido"]
-                      )
-                    }
+                    onChange={(e) => {
+                      if (isDiaryWasteLevel(e.target.value)) {
+                        setDesperdicioPercebido(e.target.value);
+                      }
+                    }}
                     className={inputClass}
                   >
+                    {isProjectSetup && (
+                      <option value="Nao informado">Ainda não informado</option>
+                    )}
                     <option value="Nenhum relevante">Nenhum relevante</option>
                     <option value="Baixo">Baixo</option>
                     <option value="Medio">Médio</option>
@@ -517,7 +645,7 @@ export function DiaryScreen({
                     type="text"
                     value={problemasEncontrados}
                     onChange={(e) => setProblemasEncontrados(e.target.value)}
-                    placeholder="Nenhum ou descreva o problema"
+                    placeholder="Se não houver problema, escreva 'Nenhum'"
                     className={inputClass}
                   />
                 </div>
@@ -538,7 +666,9 @@ export function DiaryScreen({
 
               <div className="space-y-2">
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                  Foto do dia (envie do aparelho ou selecione um modelo)
+                  {isProjectSetup
+                    ? "Foto do dia (opcional)"
+                    : "Foto do dia (envie do aparelho ou selecione um modelo)"}
                 </label>
                 <div className="flex flex-wrap items-center gap-3">
                   <label className="inline-flex items-center gap-2 px-3 py-2 text-xs font-medium text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg cursor-pointer">
@@ -551,22 +681,24 @@ export function DiaryScreen({
                       className="hidden"
                     />
                   </label>
-                  <div className="flex flex-wrap gap-1.5">
-                    {SAMPLE_PHOTOS.map((sp) => (
-                      <button
-                        key={sp.url}
-                        type="button"
-                        onClick={() => setFotoUrl(sp.url)}
-                        className={`px-2.5 py-1.5 text-xs rounded-md border cursor-pointer ${
-                          fotoUrl === sp.url
-                            ? "border-emerald-700 dark:border-emerald-500 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-900 dark:text-emerald-300 font-medium"
-                            : "border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
-                        }`}
-                      >
-                        {sp.label}
-                      </button>
-                    ))}
-                  </div>
+                  {!isProjectSetup && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {SAMPLE_PHOTOS.map((sp) => (
+                        <button
+                          key={sp.url}
+                          type="button"
+                          onClick={() => setFotoUrl(sp.url)}
+                          className={`px-2.5 py-1.5 text-xs rounded-md border cursor-pointer ${
+                            fotoUrl === sp.url
+                              ? "border-emerald-700 dark:border-emerald-500 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-900 dark:text-emerald-300 font-medium"
+                              : "border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
+                          }`}
+                        >
+                          {sp.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 

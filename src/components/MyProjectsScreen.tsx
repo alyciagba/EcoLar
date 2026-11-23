@@ -1,18 +1,21 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   Building2,
+  Loader2,
   MapPin,
   Pencil,
   Plus,
   Trash2,
   X,
 } from "lucide-react";
-import { NewProjectInput } from "../data/initialData";
 import {
   EcolarState,
   MainGoal,
+  ProjectPlanning,
   ProjectProfile,
+  ProjectSetupState,
+  ProjectState,
   ProjectStatus,
   SocialPriority,
   WorkType,
@@ -24,12 +27,17 @@ import {
   STAGE_OPTIONS,
   WORK_TYPE_LABELS,
 } from "../utils/formatters";
+import { ProjectPlanningScreen } from "./ProjectPlanningScreen";
 
 interface MyProjectsScreenProps {
-  projects: EcolarState[];
+  projects: ProjectState[];
   activeProjectId: string;
   onSelectAndOpenDashboard: (projectId: string) => void;
-  onCreateProject: (input: NewProjectInput) => void;
+  onCreateProject: (nomeObra: string) => Promise<string>;
+  onSaveProjectPlanning: (
+    projectId: string,
+    planning: ProjectPlanning
+  ) => Promise<void>;
   onUpdateProjectInfo: (
     projectId: string,
     profile: ProjectProfile,
@@ -51,28 +59,19 @@ const STATUS_TEXT_CLASS: Record<ProjectStatus, string> = {
   concluida: "text-slate-700 dark:text-slate-300",
 };
 
-function getEmptyNewProject(): NewProjectInput {
-  return {
-    nomeObra: "",
-    endereco: "",
-    cidade: "",
-    uf: "MG",
-    tipoObra: "construcao",
-    climaRegiao: "Tropical de altitude (verões quentes e chuvosos, noites amenas)",
-    metragem: 65,
-    tipoTerreno: "Terreno plano com solo firme",
-    orcamentoTotal: 55000,
-    rendaFamilia: "Entre 2 e 4 salários mínimos",
-    objetivoPrincipal: "economizar",
-    materiaisDefinidos: "",
-    etapaAtual: "Planejamento e Terreno",
-    dataInicio: new Date().toISOString().slice(0, 10),
-    previsaoConclusao: "",
-    pessoasBeneficiadas: 4,
-    possuiProjetoArquitetonico: "basico",
-    prioridadeSocial: "menor_custo",
-    status: "em_andamento",
-  };
+const PLANNING_STATUS_LABELS: Record<
+  ProjectSetupState["planning"]["status"],
+  string
+> = {
+  nao_iniciado: "Planejamento não iniciado",
+  em_andamento: "Planejamento em andamento",
+  finalizado: "Planejamento finalizado",
+};
+
+function isProjectSetupState(
+  project: ProjectState
+): project is ProjectSetupState {
+  return "kind" in project && project.kind === "setup";
 }
 
 export function MyProjectsScreen({
@@ -80,19 +79,27 @@ export function MyProjectsScreen({
   activeProjectId,
   onSelectAndOpenDashboard,
   onCreateProject,
+  onSaveProjectPlanning,
   onUpdateProjectInfo,
   onChangeStatus,
   onDeleteProject,
 }: MyProjectsScreenProps) {
   const [statusFilter, setStatusFilter] = useState<"todas" | ProjectStatus>("todas");
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [createForm, setCreateForm] = useState<NewProjectInput>(getEmptyNewProject);
+  const [createForm, setCreateForm] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [planningProjectId, setPlanningProjectId] = useState<string | null>(null);
+  const [createAttempt, setCreateAttempt] = useState<{
+    nomeObra: string;
+    existingProjectIds: Set<string>;
+  } | null>(null);
 
   const [editingProject, setEditingProject] = useState<EcolarState | null>(null);
   const [editProfile, setEditProfile] = useState<ProjectProfile | null>(null);
   const [editStatus, setEditStatus] = useState<ProjectStatus>("em_andamento");
 
-  const [deleteTarget, setDeleteTarget] = useState<EcolarState | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ProjectState | null>(null);
 
   const filteredProjects = useMemo(() => {
     if (statusFilter === "todas") return projects;
@@ -108,22 +115,71 @@ export function MyProjectsScreen({
     };
   }, [projects]);
 
+  useEffect(() => {
+    if (!createAttempt) return;
+    const createdProject = projects.find(
+      (project) =>
+        !createAttempt.existingProjectIds.has(project.id) &&
+        project.id === activeProjectId &&
+        isProjectSetupState(project)
+    );
+    if (!createdProject) return;
+
+    setPlanningProjectId(createdProject.id);
+    setShowCreateModal(false);
+    setCreateForm("");
+    setCreateError(null);
+    setCreateAttempt(null);
+    setIsCreating(false);
+  }, [activeProjectId, createAttempt, projects]);
+
   const handleOpenCreate = () => {
-    setCreateForm(getEmptyNewProject());
+    if (!createAttempt) {
+      setCreateForm("");
+      setCreateError(null);
+    }
     setShowCreateModal(true);
   };
 
-  const handleCreateSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    if (!createForm.nomeObra.trim() || !createForm.cidade.trim()) return;
-    onCreateProject({
-      ...createForm,
-      nomeObra: createForm.nomeObra.trim(),
-      cidade: createForm.cidade.trim(),
-      uf: createForm.uf.trim().toUpperCase() || "BR",
-      endereco: createForm.endereco.trim(),
-    });
+  const handleCloseCreate = () => {
+    if (isCreating) return;
     setShowCreateModal(false);
+  };
+
+  const handleCreateSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (isCreating) return;
+
+    const nomeObra = createAttempt?.nomeObra ?? createForm.trim();
+    if (!nomeObra) {
+      setCreateError("Informe o nome da obra para continuar.");
+      return;
+    }
+
+    const attempt =
+      createAttempt ?? {
+        nomeObra,
+        existingProjectIds: new Set(projects.map((project) => project.id)),
+      };
+    setCreateAttempt(attempt);
+    setIsCreating(true);
+    setCreateError(null);
+
+    try {
+      const createdProjectId = await onCreateProject(attempt.nomeObra);
+      setPlanningProjectId(createdProjectId);
+      setShowCreateModal(false);
+      setCreateForm("");
+      setCreateAttempt(null);
+    } catch (error) {
+      setCreateError(
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : "Não foi possível criar a obra. Verifique sua conexão e tente novamente."
+      );
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   const handleOpenEdit = (proj: EcolarState) => {
@@ -145,6 +201,20 @@ export function MyProjectsScreen({
     onDeleteProject(deleteTarget.id);
     setDeleteTarget(null);
   };
+
+  const planningProject = projects.find(
+    (project) => project.id === planningProjectId
+  );
+  if (planningProject && isProjectSetupState(planningProject)) {
+    return (
+      <ProjectPlanningScreen
+        key={planningProject.id}
+        project={planningProject}
+        onSavePlanning={onSaveProjectPlanning}
+        onExit={() => setPlanningProjectId(null)}
+      />
+    );
+  }
 
   const inputClass =
     "w-full px-3.5 py-2.5 text-sm bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-600 placeholder:text-slate-400 dark:placeholder:text-slate-500";
@@ -230,6 +300,64 @@ export function MyProjectsScreen({
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           {filteredProjects.map((proj) => {
             const isActive = proj.id === activeProjectId;
+            if (isProjectSetupState(proj)) {
+              return (
+                <article
+                  key={proj.id}
+                  className={`bg-white dark:bg-slate-900 border rounded-xl p-6 flex flex-col justify-between gap-5 ${
+                    isActive
+                      ? "border-emerald-600 dark:border-emerald-500 ring-1 ring-emerald-600/20"
+                      : "border-slate-200 dark:border-slate-800"
+                  }`}
+                >
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <span className={`font-semibold ${STATUS_TEXT_CLASS[proj.status]}`}>
+                        {STATUS_LABELS[proj.status]}
+                      </span>
+                      {isActive && (
+                        <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                          Selecionada
+                        </span>
+                      )}
+                    </div>
+                    <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
+                      {proj.profile.nomeObra}
+                    </h2>
+                    <p className="text-sm text-slate-600 dark:text-slate-400">
+                      {PLANNING_STATUS_LABELS[proj.planning.status]}
+                    </p>
+                  </div>
+
+                  <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setDeleteTarget(proj)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 border border-red-200 dark:border-red-800/60 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                      aria-label={`Excluir ${proj.profile.nomeObra}`}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Excluir
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onSelectAndOpenDashboard(proj.id)}
+                      disabled={isActive}
+                      aria-current={isActive ? "true" : undefined}
+                      className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+                        isActive
+                          ? "text-emerald-800 bg-emerald-50 border border-emerald-200 dark:text-emerald-300 dark:bg-emerald-950/40 dark:border-emerald-800 cursor-default"
+                          : "text-white bg-emerald-700 hover:bg-emerald-800 dark:bg-emerald-600 dark:hover:bg-emerald-500 cursor-pointer"
+                      }`}
+                    >
+                      {isActive ? "Obra selecionada" : "Selecionar obra"}
+                      {!isActive && <ArrowRight className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </article>
+              );
+            }
+
             const totalSpent = proj.expenses.reduce((s, e) => s + e.valorPago, 0);
 
             return (
@@ -396,13 +524,14 @@ export function MyProjectsScreen({
                   Adicionar nova obra
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  A nova obra terá seu próprio diagnóstico, diário, gastos e IA Engenheiro separados.
+                  Você poderá adicionar os detalhes da obra depois.
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => setShowCreateModal(false)}
-                className="p-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-lg cursor-pointer"
+                onClick={handleCloseCreate}
+                disabled={isCreating}
+                className="p-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-lg cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                 aria-label="Fechar cadastro"
               >
                 <X className="w-5 h-5" />
@@ -410,305 +539,55 @@ export function MyProjectsScreen({
             </div>
 
             <form onSubmit={handleCreateSubmit} className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="sm:col-span-2">
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Nome da obra *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={createForm.nomeObra}
-                    onChange={(e) =>
-                      setCreateForm({ ...createForm, nomeObra: e.target.value })
-                    }
-                    placeholder="Ex: Reforma Casa Dona Maria ou Residencial Ipê"
-                    className={inputClass}
-                  />
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Endereço ou bairro
-                  </label>
-                  <input
-                    type="text"
-                    value={createForm.endereco}
-                    onChange={(e) =>
-                      setCreateForm({ ...createForm, endereco: e.target.value })
-                    }
-                    placeholder="Ex: Rua dos Pinheiros, 82 — Centro"
-                    className={inputClass}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Cidade e Estado *
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      required
-                      value={createForm.cidade}
-                      onChange={(e) =>
-                        setCreateForm({ ...createForm, cidade: e.target.value })
-                      }
-                      placeholder="Ex: Campinas"
-                      className={inputClass}
-                    />
-                    <input
-                      type="text"
-                      maxLength={2}
-                      value={createForm.uf}
-                      onChange={(e) =>
-                        setCreateForm({
-                          ...createForm,
-                          uf: e.target.value.toUpperCase(),
-                        })
-                      }
-                      placeholder="SP"
-                      className="w-16 px-2.5 py-2.5 text-sm bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-600"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Clima da região
-                  </label>
-                  <select
-                    value={createForm.climaRegiao}
-                    onChange={(e) =>
-                      setCreateForm({ ...createForm, climaRegiao: e.target.value })
-                    }
-                    className={inputClass}
-                  >
-                    <option value="Tropical de altitude (verões quentes e chuvosos, noites amenas)">
-                      Tropical de altitude (verões quentes e chuvosos)
-                    </option>
-                    <option value="Quente e úmido o ano todo (litoral / norte)">
-                      Quente e úmido o ano todo
-                    </option>
-                    <option value="Quente e seco (semiárido / centro-oeste)">
-                      Quente e seco
-                    </option>
-                    <option value="Subtropical (verão quente e inverno frio)">
-                      Subtropical
-                    </option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Tipo de obra
-                  </label>
-                  <select
-                    value={createForm.tipoObra}
-                    onChange={(e) =>
-                      setCreateForm({
-                        ...createForm,
-                        tipoObra: e.target.value as WorkType,
-                      })
-                    }
-                    className={inputClass}
-                  >
-                    {Object.entries(WORK_TYPE_LABELS).map(([k, label]) => (
-                      <option key={k} value={k}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Metragem estimada (m²)
-                  </label>
-                  <input
-                    type="number"
-                    required
-                    min={10}
-                    value={createForm.metragem}
-                    onChange={(e) =>
-                      setCreateForm({
-                        ...createForm,
-                        metragem: Number(e.target.value) || 0,
-                      })
-                    }
-                    className={`${inputClass} font-mono tabular-nums`}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Orçamento disponível (R$)
-                  </label>
-                  <input
-                    type="number"
-                    required
-                    min={1000}
-                    step={500}
-                    value={createForm.orcamentoTotal}
-                    onChange={(e) =>
-                      setCreateForm({
-                        ...createForm,
-                        orcamentoTotal: Number(e.target.value) || 0,
-                      })
-                    }
-                    className={`${inputClass} font-mono tabular-nums`}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Etapa atual
-                  </label>
-                  <select
-                    value={createForm.etapaAtual}
-                    onChange={(e) =>
-                      setCreateForm({ ...createForm, etapaAtual: e.target.value })
-                    }
-                    className={inputClass}
-                  >
-                    {STAGE_OPTIONS.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Data de início
-                  </label>
-                  <input
-                    type="date"
-                    value={createForm.dataInicio}
-                    onChange={(e) =>
-                      setCreateForm({ ...createForm, dataInicio: e.target.value })
-                    }
-                    className={`${inputClass} font-mono`}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Previsão de conclusão
-                  </label>
-                  <input
-                    type="date"
-                    value={createForm.previsaoConclusao}
-                    onChange={(e) =>
-                      setCreateForm({
-                        ...createForm,
-                        previsaoConclusao: e.target.value,
-                      })
-                    }
-                    className={`${inputClass} font-mono`}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Objetivo principal da obra
-                  </label>
-                  <select
-                    value={createForm.objetivoPrincipal}
-                    onChange={(e) =>
-                      setCreateForm({
-                        ...createForm,
-                        objetivoPrincipal: e.target.value as MainGoal,
-                      })
-                    }
-                    className={inputClass}
-                  >
-                    {Object.entries(GOAL_LABELS).map(([k, label]) => (
-                      <option key={k} value={k}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Prioridade social
-                  </label>
-                  <select
-                    value={createForm.prioridadeSocial}
-                    onChange={(e) =>
-                      setCreateForm({
-                        ...createForm,
-                        prioridadeSocial: e.target.value as SocialPriority,
-                      })
-                    }
-                    className={inputClass}
-                  >
-                    {Object.entries(PRIORITY_SOCIAL_LABELS).map(([k, label]) => (
-                      <option key={k} value={k}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Projeto arquitetônico
-                  </label>
-                  <select
-                    value={createForm.possuiProjetoArquitetonico}
-                    onChange={(e) =>
-                      setCreateForm({
-                        ...createForm,
-                        possuiProjetoArquitetonico: e.target.value as
-                          | "sim_completo"
-                          | "basico"
-                          | "nao",
-                      })
-                    }
-                    className={inputClass}
-                  >
-                    <option value="sim_completo">Projeto completo</option>
-                    <option value="basico">Croqui / planta básica</option>
-                    <option value="nao">Ainda não tem projeto</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Pessoas beneficiadas
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={createForm.pessoasBeneficiadas}
-                    onChange={(e) =>
-                      setCreateForm({
-                        ...createForm,
-                        pessoasBeneficiadas: Number(e.target.value) || 1,
-                      })
-                    }
-                    className={`${inputClass} font-mono tabular-nums`}
-                  />
-                </div>
+              <div>
+                <label
+                  htmlFor="new-project-name"
+                  className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
+                >
+                  Nome da obra *
+                </label>
+                <input
+                  id="new-project-name"
+                  type="text"
+                  required
+                  autoFocus
+                  disabled={Boolean(createAttempt)}
+                  value={createForm}
+                  onChange={(e) => setCreateForm(e.target.value)}
+                  placeholder="Ex: Reforma da minha casa"
+                  className={inputClass}
+                />
               </div>
+
+              {createError && (
+                <p
+                  className="rounded-lg bg-red-50 p-3 text-sm text-red-800 dark:bg-red-950/40 dark:text-red-200"
+                  role="alert"
+                >
+                  {createError}
+                </p>
+              )}
 
               <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end gap-3">
                 <button
                   type="button"
-                  onClick={() => setShowCreateModal(false)}
-                  className="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer"
+                  onClick={handleCloseCreate}
+                  disabled={isCreating}
+                  className="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 text-sm font-medium text-white bg-emerald-700 hover:bg-emerald-800 dark:bg-emerald-600 dark:hover:bg-emerald-500 rounded-lg cursor-pointer"
+                  disabled={isCreating}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-emerald-700 hover:bg-emerald-800 dark:bg-emerald-600 dark:hover:bg-emerald-500 rounded-lg cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Cadastrar obra
+                  {isCreating && <Loader2 className="w-4 h-4 animate-spin" />}
+                  {isCreating
+                    ? "Salvando..."
+                    : createAttempt
+                      ? "Tentar novamente"
+                      : "Cadastrar obra"}
                 </button>
               </div>
             </form>

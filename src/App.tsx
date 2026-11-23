@@ -22,9 +22,8 @@ import {
   X,
 } from "lucide-react";
 import {
-  createNewProjectState,
+  createProjectSetupState,
   INITIAL_ECOLAR_STATE,
-  NewProjectInput,
 } from "./data/initialData";
 import {
   AlertItem,
@@ -34,7 +33,11 @@ import {
   DiaryEntry,
   EcolarState,
   ExpenseItem,
+  ImprovementItem,
   ProjectProfile,
+  ProjectPlanning,
+  ProjectSetupState,
+  ProjectState,
   ProjectStatus,
   ScreenId,
   ThemePreference,
@@ -64,11 +67,40 @@ const THEME_STORAGE_KEY = "ecolar_theme_preference_v1";
 
 interface MultiProjectStore {
   activeProjectId: string;
-  projects: EcolarState[];
+  projects: ProjectState[];
+}
+
+interface ProjectCreateWaiter {
+  resolve: (projectId: string) => void;
+  reject: (error: Error) => void;
+}
+
+interface ProjectSaveWaiter {
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
+interface ProjectCreateOperation {
+  kind: "create";
+  project: ProjectState;
+  waiters: ProjectCreateWaiter[];
+}
+
+interface ProjectPlanningUpdateOperation {
+  kind: "updatePlanning";
+  planning: ProjectPlanning;
+  waiters: ProjectSaveWaiter[];
+}
+
+interface ProjectSetupUpdateOperation {
+  kind: "updateSetup";
+  apply: (project: ProjectSetupState) => ProjectSetupState;
 }
 
 type ProjectSaveOperation =
-  | { kind: "create"; project: EcolarState }
+  | ProjectCreateOperation
+  | ProjectPlanningUpdateOperation
+  | ProjectSetupUpdateOperation
   | { kind: "update"; apply: (project: EcolarState) => EcolarState }
   | { kind: "delete" };
 
@@ -126,6 +158,16 @@ const SCREEN_TITLES: Record<ScreenId, string> = {
   configuracoes: "Configurações",
 };
 
+function isProjectSetupState(project: ProjectState): project is ProjectSetupState {
+  return "kind" in project && project.kind === "setup";
+}
+
+function isEcolarState(
+  project: ProjectState | null | undefined
+): project is EcolarState {
+  return project !== null && project !== undefined && !isProjectSetupState(project);
+}
+
 function loadInitialTheme(): ThemePreference {
   try {
     const saved = localStorage.getItem(THEME_STORAGE_KEY);
@@ -154,8 +196,15 @@ export default function App({ userId, onSignOut }: AppProps) {
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [saveStatuses, setSaveStatuses] = useState<Record<string, SaveStatus>>({});
   const [signOutError, setSignOutError] = useState<string | null>(null);
+  const [navigationNotice, setNavigationNotice] = useState<string | null>(null);
   const queuesRef = useRef(new Map<string, ProjectSaveOperation[]>());
   const processingProjectsRef = useRef(new Set<string>());
+  const pendingProjectCreationsRef = useRef(
+    new Map<string, ProjectCreateOperation>()
+  );
+  const pendingProjectPlanningUpdatesRef = useRef(
+    new Map<string, ProjectPlanningUpdateOperation>()
+  );
   const requestControllerRef = useRef<AbortController | null>(null);
   const sessionVersionRef = useRef(0);
   const sessionReadyRef = useRef(false);
@@ -176,6 +225,20 @@ export default function App({ userId, onSignOut }: AppProps) {
   const replaceStore = (nextStore: MultiProjectStore) => {
     storeRef.current = nextStore;
     setStore(nextStore);
+  };
+
+  const clearPendingProjectOperations = () => {
+    const error = new Error(
+      "A sessão foi encerrada antes de confirmar o salvamento."
+    );
+    for (const operation of pendingProjectCreationsRef.current.values()) {
+      operation.waiters.splice(0).forEach((waiter) => waiter.reject(error));
+    }
+    pendingProjectCreationsRef.current.clear();
+    for (const operation of pendingProjectPlanningUpdatesRef.current.values()) {
+      operation.waiters.splice(0).forEach((waiter) => waiter.reject(error));
+    }
+    pendingProjectPlanningUpdatesRef.current.clear();
   };
 
   useEffect(() => {
@@ -218,6 +281,7 @@ export default function App({ userId, onSignOut }: AppProps) {
     sessionReadyRef.current = false;
     queuesRef.current.clear();
     processingProjectsRef.current.clear();
+    clearPendingProjectOperations();
     updatedAtByProjectRef.current.clear();
     replaceStore({ activeProjectId: "", projects: [] });
     setSaveStatuses({});
@@ -241,6 +305,9 @@ export default function App({ userId, onSignOut }: AppProps) {
           activeProjectId: projects[0]?.id ?? "",
           projects,
         });
+        if (projects[0] && isProjectSetupState(projects[0])) {
+          setActiveScreen("obras");
+        }
         sessionReadyRef.current = true;
         setIsLoadingProjects(false);
       })
@@ -270,6 +337,7 @@ export default function App({ userId, onSignOut }: AppProps) {
       }
       queuesRef.current.clear();
       processingProjectsRef.current.clear();
+      clearPendingProjectOperations();
       updatedAtByProjectRef.current.clear();
     };
   }, [userId, loadAttempt]);
@@ -281,6 +349,11 @@ export default function App({ userId, onSignOut }: AppProps) {
       null
     );
   }, [store]);
+  const activeEcolarProject = isEcolarState(activeProject)
+    ? activeProject
+    : null;
+  const activeSetupProject =
+    activeProject && isProjectSetupState(activeProject) ? activeProject : null;
 
   // Calcula indicadores dinâmicos isolados para a obra ativa
   const baselinePlanIds = useMemo(
@@ -289,7 +362,7 @@ export default function App({ userId, onSignOut }: AppProps) {
   );
 
   const deltaStats = useMemo(() => {
-    if (!activeProject) {
+    if (!activeEcolarProject) {
       return {
         totalSavings: 0,
         totalWaterSaved: 0,
@@ -299,13 +372,13 @@ export default function App({ userId, onSignOut }: AppProps) {
       };
     }
 
-    const isSeedProject = activeProject.id === INITIAL_ECOLAR_STATE.id;
+    const isSeedProject = activeEcolarProject.id === INITIAL_ECOLAR_STATE.id;
     let extraSavings = 0;
     let extraWater = 0;
     let extraCo2 = 0;
     let extraWaste = 0;
 
-    activeProject.improvements.forEach((imp) => {
+    activeEcolarProject.improvements.forEach((imp) => {
       const wasDefault = isSeedProject && baselinePlanIds.has(imp.id);
       if (imp.adicionadaAoPlano && !wasDefault) {
         extraSavings += Math.round(imp.economiaEstimada * 0.4);
@@ -321,16 +394,16 @@ export default function App({ userId, onSignOut }: AppProps) {
     });
 
     return {
-      totalSavings: Math.max(0, activeProject.baseSavings + extraSavings),
-      totalWaterSaved: Math.max(0, activeProject.baseWaterSavedLiters + extraWater),
-      totalCo2AvoidedKg: Math.max(0, activeProject.baseCo2AvoidedKg + extraCo2),
-      totalWasteDivertedKg: Math.max(0, activeProject.baseWasteDivertedKg + extraWaste),
+      totalSavings: Math.max(0, activeEcolarProject.baseSavings + extraSavings),
+      totalWaterSaved: Math.max(0, activeEcolarProject.baseWaterSavedLiters + extraWater),
+      totalCo2AvoidedKg: Math.max(0, activeEcolarProject.baseCo2AvoidedKg + extraCo2),
+      totalWasteDivertedKg: Math.max(0, activeEcolarProject.baseWasteDivertedKg + extraWaste),
       totalReusedKg: Math.max(
         0,
-        activeProject.baseReusedMaterialsKg + Math.round(extraWaste * 0.4)
+        activeEcolarProject.baseReusedMaterialsKg + Math.round(extraWaste * 0.4)
       ),
     };
-  }, [activeProject, baselinePlanIds]);
+  }, [activeEcolarProject, baselinePlanIds]);
 
   const openAlertsCount = activeProject
     ? activeProject.alerts.filter((a) => !a.resolvido).length
@@ -381,8 +454,62 @@ export default function App({ userId, onSignOut }: AppProps) {
               ),
             ],
           };
+        } else if (operation.kind === "updatePlanning") {
+          if (
+            !currentProject ||
+            !isProjectSetupState(currentProject)
+          ) {
+            throw new Error(
+              "O planejamento só pode ser salvo em uma obra em configuração."
+            );
+          }
+          const updatedProject: ProjectSetupState = {
+            ...currentProject,
+            planning: operation.planning,
+          };
+          const expectedUpdatedAt =
+            updatedAtByProjectRef.current.get(projectId);
+          if (!expectedUpdatedAt) {
+            throw new Error("A data de atualização da obra não está disponível.");
+          }
+          const updatedAt = await updateUserProject(
+            userId,
+            updatedProject,
+            expectedUpdatedAt,
+            controller.signal
+          );
+          updatedAtByProjectRef.current.set(projectId, updatedAt);
+          nextStore = {
+            ...storeRef.current,
+            projects: storeRef.current.projects.map((project) =>
+              project.id === projectId ? updatedProject : project
+            ),
+          };
+        } else if (operation.kind === "updateSetup") {
+          if (!currentProject || !isProjectSetupState(currentProject)) {
+            throw new Error("A obra não está mais disponível nesta sessão.");
+          }
+          const updatedProject = operation.apply(currentProject);
+          const expectedUpdatedAt =
+            updatedAtByProjectRef.current.get(projectId);
+          if (!expectedUpdatedAt) {
+            throw new Error("A data de atualização da obra não está disponível.");
+          }
+          const updatedAt = await updateUserProject(
+            userId,
+            updatedProject,
+            expectedUpdatedAt,
+            controller.signal
+          );
+          updatedAtByProjectRef.current.set(projectId, updatedAt);
+          nextStore = {
+            ...storeRef.current,
+            projects: storeRef.current.projects.map((project) =>
+              project.id === projectId ? updatedProject : project
+            ),
+          };
         } else if (operation.kind === "update") {
-          if (!currentProject) {
+          if (!currentProject || !isEcolarState(currentProject)) {
             throw new Error("A obra não está mais disponível nesta sessão.");
           }
           const updatedProject = operation.apply(currentProject);
@@ -439,6 +566,22 @@ export default function App({ userId, onSignOut }: AppProps) {
 
         replaceStore(nextStore);
         queue.shift();
+        if (operation.kind === "create") {
+          for (const [name, pendingOperation] of pendingProjectCreationsRef.current) {
+            if (pendingOperation === operation) {
+              pendingProjectCreationsRef.current.delete(name);
+              break;
+            }
+          }
+          operation.waiters
+            .splice(0)
+            .forEach((waiter) => waiter.resolve(operation.project.id));
+        } else if (operation.kind === "updatePlanning") {
+          if (pendingProjectPlanningUpdatesRef.current.get(projectId) === operation) {
+            pendingProjectPlanningUpdatesRef.current.delete(projectId);
+          }
+          operation.waiters.splice(0).forEach((waiter) => waiter.resolve());
+        }
         if (queue.length === 0) {
           queuesRef.current.delete(projectId);
           setSaveStatuses((previous) => {
@@ -465,9 +608,11 @@ export default function App({ userId, onSignOut }: AppProps) {
           ? "Esta obra foi alterada em outra sessão. Esta alteração não foi salva; atualize as obras e aplique-a novamente."
           : failedOperation?.kind === "create"
             ? "Não foi possível criar a obra. Ela ainda não foi salva; tente novamente."
-            : failedOperation?.kind === "delete"
-              ? "Não foi possível excluir a obra. Ela continua salva; tente novamente."
-              : "Não foi possível salvar as alterações da obra. Os dados anteriores continuam salvos; tente novamente.";
+            : failedOperation?.kind === "updatePlanning"
+              ? "Não foi possível salvar o planejamento. A resposta continua pendente; tente novamente."
+              : failedOperation?.kind === "delete"
+                ? "Não foi possível excluir a obra. Ela continua salva; tente novamente."
+                : "Não foi possível salvar as alterações da obra. Os dados anteriores continuam salvos; tente novamente.";
         setSaveStatuses((previous) => ({
           ...previous,
           [projectId]: {
@@ -476,6 +621,17 @@ export default function App({ userId, onSignOut }: AppProps) {
             requiresReload: isConflict,
           },
         }));
+        if (failedOperation?.kind === "create") {
+          const createError = new Error(message);
+          failedOperation.waiters
+            .splice(0)
+            .forEach((waiter) => waiter.reject(createError));
+        } else if (failedOperation?.kind === "updatePlanning") {
+          const planningError = new Error(message);
+          failedOperation.waiters
+            .splice(0)
+            .forEach((waiter) => waiter.reject(planningError));
+        }
       }
     } finally {
       processingProjectsRef.current.delete(projectId);
@@ -488,6 +644,24 @@ export default function App({ userId, onSignOut }: AppProps) {
   ) => {
     if (!sessionReadyRef.current || !sessionActiveRef.current) return;
     const queue = queuesRef.current.get(projectId) ?? [];
+    if (
+      operation.kind === "create" &&
+      queue.some(
+        (queuedOperation) =>
+          queuedOperation.kind === "create" &&
+          queuedOperation.project.id === operation.project.id
+      )
+    ) {
+      void processProjectQueue(projectId);
+      return;
+    }
+    if (
+      operation.kind === "updatePlanning" &&
+      queue.includes(operation)
+    ) {
+      void processProjectQueue(projectId);
+      return;
+    }
     queue.push(operation);
     queuesRef.current.set(projectId, queue);
     setSaveStatuses((previous) => ({
@@ -531,54 +705,123 @@ export default function App({ userId, onSignOut }: AppProps) {
     }
   };
 
-  const updateActiveProject = (updater: (prev: EcolarState) => EcolarState) => {
+  const updateActiveProject = (
+    updater: (prev: EcolarState) => EcolarState,
+    setupUpdater?: (prev: ProjectSetupState) => ProjectSetupState
+  ) => {
     const currentStore = storeRef.current;
-    const projectId =
+    const project =
       currentStore.projects.find(
-        (project) => project.id === currentStore.activeProjectId
-      )?.id ?? currentStore.projects[0]?.id;
-    if (!projectId) return;
+        (item) => item.id === currentStore.activeProjectId
+      ) ?? currentStore.projects[0];
+    if (!project) return;
+    const projectId = project.id;
+    if (isProjectSetupState(project)) {
+      if (!setupUpdater) return;
+      enqueueProjectOperation(projectId, {
+        kind: "updateSetup",
+        apply: setupUpdater,
+      });
+      return;
+    }
+    if (!isEcolarState(project)) return;
     enqueueProjectOperation(projectId, { kind: "update", apply: updater });
   };
 
   const handleNavigate = (screen: ScreenId) => {
+    if (activeSetupProject) {
+      const availableScreens: ScreenId[] = [
+        "obras",
+        "diario",
+        "gastos",
+        "assistente",
+        "melhorias",
+        "alertas",
+        "configuracoes",
+      ];
+      if (!availableScreens.includes(screen)) {
+        const unavailableMessages: Partial<Record<ScreenId, string>> = {
+          dashboard:
+            "O Dashboard ficará disponível quando a obra tiver dados técnicos suficientes, como etapa, área e orçamento.",
+          diagnostico:
+            "O Diagnóstico precisa de informações técnicas da obra, como tipo, área e orçamento.",
+          impacto:
+            "Os indicadores de Impacto dependem de dados técnicos e de uma análise inicial da obra.",
+          ia: "O Assistente de IA ainda não pode gerar orientações seguras sem informações técnicas da obra.",
+          perfil:
+            "A edição do perfil técnico estará disponível quando os dados técnicos da obra forem informados.",
+        };
+        setNavigationNotice(
+          unavailableMessages[screen] ??
+            "Esta funcionalidade ainda precisa de dados técnicos da obra."
+        );
+        setMobileMenuOpen(false);
+        return;
+      }
+    }
+    setNavigationNotice(null);
     setActiveScreen(screen);
     setMobileMenuOpen(false);
   };
 
   const handleOpenNewDiary = () => {
+    if (!activeProject) return;
+    setNavigationNotice(null);
     setActiveScreen("diario");
     setShowNewDiaryModal(true);
     setMobileMenuOpen(false);
   };
 
   const handleAskAi = (question: string) => {
+    if (!activeEcolarProject) {
+      setNavigationNotice(
+        "O Assistente de IA depende de dados técnicos da obra, que ainda não foram informados."
+      );
+      setMobileMenuOpen(false);
+      return;
+    }
+    setNavigationNotice(null);
     setPendingAiQuestion(question);
     setActiveScreen("ia");
     setMobileMenuOpen(false);
   };
 
   const handleToggleImprovement = (id: string) => {
-    updateActiveProject((prev) => ({
-      ...prev,
-      improvements: prev.improvements.map((item) =>
+    const toggleItem = (items: ImprovementItem[]) =>
+      items.map((item) =>
         item.id === id
           ? { ...item, adicionadaAoPlano: !item.adicionadaAoPlano }
           : item
-      ),
-    }));
+      );
+    updateActiveProject(
+      (prev) => ({ ...prev, improvements: toggleItem(prev.improvements) }),
+      (prev) => ({ ...prev, improvements: toggleItem(prev.improvements) })
+    );
   };
 
   const handleUpdateTaskStatus = (
     id: string,
     status: "pendente" | "feito" | "adiado"
   ) => {
-    updateActiveProject((prev) => ({
-      ...prev,
-      assistantTasks: prev.assistantTasks.map((t) =>
-        t.id === id ? { ...t, status } : t
-      ),
-    }));
+    const updateTasks = (tasks: AssistantTask[]) =>
+      tasks.map((task) => (task.id === id ? { ...task, status } : task));
+    updateActiveProject(
+      (prev) => ({ ...prev, assistantTasks: updateTasks(prev.assistantTasks) }),
+      (prev) => ({ ...prev, assistantTasks: updateTasks(prev.assistantTasks) })
+    );
+  };
+
+  const handleAddTask = (task: AssistantTask) => {
+    updateActiveProject(
+      (prev) => ({
+        ...prev,
+        assistantTasks: [task, ...prev.assistantTasks],
+      }),
+      (prev) => ({
+        ...prev,
+        assistantTasks: [task, ...prev.assistantTasks],
+      })
+    );
   };
 
   const handleAddTaskToDiary = (task: AssistantTask) => {
@@ -645,46 +888,70 @@ export default function App({ userId, onSignOut }: AppProps) {
   };
 
   const handleAddDiaryEntry = (entry: DiaryEntry) => {
-    updateActiveProject((prev) => {
-      const nextBudgets = prev.stageBudgets.map((sb) =>
-        sb.etapa === entry.etapaConcluida
-          ? { ...sb, realizado: sb.realizado + entry.valorGasto }
-          : sb
-      );
-      return {
-        ...prev,
-        diary: [entry, ...prev.diary],
-        stageBudgets: nextBudgets,
-        profile: {
-          ...prev.profile,
-          progressoGeral: Math.min(100, prev.profile.progressoGeral + 2),
-        },
-      };
-    });
+    updateActiveProject(
+      (prev) => {
+        const nextBudgets = prev.stageBudgets.map((budget) =>
+          entry.etapaConcluida && budget.etapa === entry.etapaConcluida
+            ? { ...budget, realizado: budget.realizado + entry.valorGasto }
+            : budget
+        );
+        return {
+          ...prev,
+          diary: [entry, ...prev.diary],
+          stageBudgets: nextBudgets,
+          profile: {
+            ...prev.profile,
+            progressoGeral: Math.min(100, prev.profile.progressoGeral + 2),
+          },
+        };
+      },
+      (prev) => {
+        const nextBudgets = prev.stageBudgets.map((budget) =>
+          entry.etapaConcluida && budget.etapa === entry.etapaConcluida
+            ? { ...budget, realizado: budget.realizado + entry.valorGasto }
+            : budget
+        );
+        return {
+          ...prev,
+          diary: [entry, ...prev.diary],
+          stageBudgets: nextBudgets,
+        };
+      }
+    );
   };
 
   const handleAddExpense = (expense: ExpenseItem) => {
-    updateActiveProject((prev) => {
-      const nextBudgets = prev.stageBudgets.map((sb) =>
-        sb.etapa === expense.etapa
-          ? { ...sb, realizado: sb.realizado + expense.valorPago }
-          : sb
-      );
-      return {
+    updateActiveProject(
+      (prev) => ({
         ...prev,
         expenses: [expense, ...prev.expenses],
-        stageBudgets: nextBudgets,
-      };
-    });
+        stageBudgets: prev.stageBudgets.map((budget) =>
+          expense.etapa && budget.etapa === expense.etapa
+            ? { ...budget, realizado: budget.realizado + expense.valorPago }
+            : budget
+        ),
+      }),
+      (prev) => ({
+        ...prev,
+        expenses: [expense, ...prev.expenses],
+        stageBudgets: prev.stageBudgets.map((budget) =>
+          expense.etapa && budget.etapa === expense.etapa
+            ? { ...budget, realizado: budget.realizado + expense.valorPago }
+            : budget
+        ),
+      })
+    );
   };
 
   const handleToggleAlert = (id: string) => {
-    updateActiveProject((prev) => ({
-      ...prev,
-      alerts: prev.alerts.map((a) =>
-        a.id === id ? { ...a, resolvido: !a.resolvido } : a
-      ),
-    }));
+    const toggleAlert = (alerts: AlertItem[]) =>
+      alerts.map((alert) =>
+        alert.id === id ? { ...alert, resolvido: !alert.resolvido } : alert
+      );
+    updateActiveProject(
+      (prev) => ({ ...prev, alerts: toggleAlert(prev.alerts) }),
+      (prev) => ({ ...prev, alerts: toggleAlert(prev.alerts) })
+    );
   };
 
   const handleToggleWeeklyGoal = (id: string) => {
@@ -697,10 +964,10 @@ export default function App({ userId, onSignOut }: AppProps) {
   };
 
   const handleQuickProgressUpdate = (delta: number, note: string) => {
-    if (!activeProject) return;
+    if (!activeEcolarProject) return;
     const baseData: Omit<DiaryEntry, "id" | "resumoAutomatico"> = {
       data: new Date().toISOString().slice(0, 10),
-      etapaConcluida: activeProject.profile.etapaAtual,
+      etapaConcluida: activeEcolarProject.profile.etapaAtual,
       materiaisComprados: "Atualização rápida",
       quantidadeMateriais: "—",
       valorGasto: 0,
@@ -751,8 +1018,8 @@ export default function App({ userId, onSignOut }: AppProps) {
   };
 
   const handleResetDemo = () => {
-    if (!activeProject) return;
-    if (activeProject.id === INITIAL_ECOLAR_STATE.id) {
+    if (!activeEcolarProject) return;
+    if (activeEcolarProject.id === INITIAL_ECOLAR_STATE.id) {
       updateActiveProject(() => INITIAL_ECOLAR_STATE);
     } else {
       updateActiveProject((prev) => ({
@@ -768,25 +1035,121 @@ export default function App({ userId, onSignOut }: AppProps) {
   const handleSwitchProject = (projectId: string) => {
     setPendingAiQuestion(null);
     setShowNewDiaryModal(false);
+    setNavigationNotice(null);
+    const selectedProject = storeRef.current.projects.find(
+      (project) => project.id === projectId
+    );
     replaceStore({
       ...storeRef.current,
       activeProjectId: projectId,
     });
+    if (selectedProject && isProjectSetupState(selectedProject)) {
+      setActiveScreen("obras");
+    }
   };
 
   const handleSelectAndOpenDashboard = (projectId: string) => {
     setPendingAiQuestion(null);
     setShowNewDiaryModal(false);
+    setNavigationNotice(null);
+    const selectedProject = storeRef.current.projects.find(
+      (project) => project.id === projectId
+    );
     replaceStore({
       ...storeRef.current,
       activeProjectId: projectId,
     });
-    setActiveScreen("dashboard");
+    setActiveScreen(
+      selectedProject && isProjectSetupState(selectedProject)
+        ? "obras"
+        : "dashboard"
+    );
   };
 
-  const handleCreateProject = (input: NewProjectInput) => {
-    const created = createNewProjectState(input);
-    enqueueProjectOperation(created.id, { kind: "create", project: created });
+  const handleCreateProject = (nomeObra: string): Promise<string> => {
+    const projectName = nomeObra.trim();
+    if (!projectName) {
+      return Promise.reject(new Error("O nome da obra é obrigatório."));
+    }
+    if (!sessionReadyRef.current || !sessionActiveRef.current) {
+      return Promise.reject(new Error("A sessão ainda não está pronta para salvar."));
+    }
+
+    let operation = pendingProjectCreationsRef.current.get(projectName);
+    if (!operation) {
+      operation = {
+        kind: "create",
+        project: createProjectSetupState(projectName),
+        waiters: [],
+      };
+      pendingProjectCreationsRef.current.set(projectName, operation);
+    }
+
+    return new Promise<string>((resolve, reject) => {
+      operation?.waiters.push({ resolve, reject });
+      const queue = queuesRef.current.get(operation.project.id);
+      if (queue?.includes(operation)) {
+        setSaveStatuses((previous) => ({
+          ...previous,
+          [operation.project.id]: { state: "saving" },
+        }));
+        void processProjectQueue(operation.project.id);
+      } else {
+        enqueueProjectOperation(operation.project.id, operation);
+      }
+    });
+  };
+
+  const handleUpdateProjectPlanning = (
+    projectId: string,
+    planning: ProjectPlanning
+  ): Promise<void> => {
+    if (!sessionReadyRef.current || !sessionActiveRef.current) {
+      return Promise.reject(new Error("A sessão ainda não está pronta para salvar."));
+    }
+
+    const project = storeRef.current.projects.find(
+      (item) => item.id === projectId
+    );
+    if (!project || !isProjectSetupState(project)) {
+      return Promise.reject(
+        new Error("O planejamento só pode ser salvo em uma obra em configuração.")
+      );
+    }
+
+    let operation = pendingProjectPlanningUpdatesRef.current.get(projectId);
+    if (
+      operation &&
+      JSON.stringify(operation.planning) !== JSON.stringify(planning)
+    ) {
+      return Promise.reject(
+        new Error(
+          "Conclua ou tente novamente o salvamento pendente antes de alterar a resposta."
+        )
+      );
+    }
+    if (!operation) {
+      operation = {
+        kind: "updatePlanning",
+        planning,
+        waiters: [],
+      };
+      pendingProjectPlanningUpdatesRef.current.set(projectId, operation);
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      operation.waiters.push({ resolve, reject });
+      const queue = queuesRef.current.get(projectId);
+      if (queue?.includes(operation)) {
+        setSaveStatuses((previous) => ({
+          ...previous,
+          [projectId]: { state: "saving" },
+        }));
+        void processProjectQueue(projectId);
+      } else {
+        enqueueProjectOperation(projectId, operation);
+      }
+    });
   };
 
   const handleUpdateProjectInfo = (
@@ -1182,6 +1545,15 @@ export default function App({ userId, onSignOut }: AppProps) {
               {signOutError}
             </p>
           )}
+          {navigationNotice && (
+            <p
+              className="mb-5 rounded-lg bg-amber-50 p-4 text-sm leading-relaxed text-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+              role="status"
+              aria-live="polite"
+            >
+              {navigationNotice}
+            </p>
+          )}
           {isSaving && (
             <p className="mb-5 flex items-center gap-2 rounded-lg bg-slate-100 p-4 text-sm text-slate-700 dark:bg-slate-900 dark:text-slate-200" role="status" aria-live="polite">
               <Loader2 className="h-4 w-4 animate-spin text-emerald-700 dark:text-emerald-400" />
@@ -1223,22 +1595,24 @@ export default function App({ userId, onSignOut }: AppProps) {
             />
           )}
 
-          {activeScreen !== "configuracoes" && (activeScreen === "obras" || !activeProject) && (
+          {activeScreen !== "configuracoes" &&
+            (activeScreen === "obras" || !activeProject) && (
             <MyProjectsScreen
               projects={store.projects}
               activeProjectId={activeProject?.id ?? ""}
               onSelectAndOpenDashboard={handleSelectAndOpenDashboard}
               onCreateProject={handleCreateProject}
+              onSaveProjectPlanning={handleUpdateProjectPlanning}
               onUpdateProjectInfo={handleUpdateProjectInfo}
               onChangeStatus={handleChangeProjectStatus}
               onDeleteProject={handleDeleteProject}
             />
           )}
 
-          {activeProject && activeScreen === "dashboard" && (
+          {activeEcolarProject && activeScreen === "dashboard" && (
             <DashboardScreen
-              key={activeProject.id}
-              state={activeProject}
+              key={activeEcolarProject.id}
+              state={activeEcolarProject}
               totalSavings={deltaStats.totalSavings}
               totalWaterSaved={deltaStats.totalWaterSaved}
               totalCo2AvoidedKg={deltaStats.totalCo2AvoidedKg}
@@ -1251,11 +1625,11 @@ export default function App({ userId, onSignOut }: AppProps) {
             />
           )}
 
-          {activeProject && activeScreen === "diagnostico" && (
+          {activeEcolarProject && activeScreen === "diagnostico" && (
             <DiagnosisScreen
-              key={activeProject.id}
-              profile={activeProject.profile}
-              diagnosis={activeProject.diagnosis}
+              key={activeEcolarProject.id}
+              profile={activeEcolarProject.profile}
+              diagnosis={activeEcolarProject.diagnosis}
               onUpdateProfileAndDiagnosis={handleUpdateProfileAndDiagnosis}
               onNavigate={handleNavigate}
             />
@@ -1266,6 +1640,7 @@ export default function App({ userId, onSignOut }: AppProps) {
               key={activeProject.id}
               improvements={activeProject.improvements}
               onTogglePlan={handleToggleImprovement}
+              isProjectSetup={Boolean(activeSetupProject)}
             />
           )}
 
@@ -1273,8 +1648,10 @@ export default function App({ userId, onSignOut }: AppProps) {
             <AssistantScreen
               key={activeProject.id}
               tasks={activeProject.assistantTasks}
-              currentStage={activeProject.profile.etapaAtual}
+              currentStage={activeProject.profile.etapaAtual ?? null}
+              isProjectSetup={Boolean(activeSetupProject)}
               onUpdateStatus={handleUpdateTaskStatus}
+              onAddTask={handleAddTask}
               onAskAi={handleAskAi}
               onAddToDiary={handleAddTaskToDiary}
               onReportProblem={handleReportProblemFromTask}
@@ -1286,27 +1663,28 @@ export default function App({ userId, onSignOut }: AppProps) {
               key={activeProject.id}
               entries={activeProject.diary}
               stageBudgets={activeProject.stageBudgets}
+              isProjectSetup={Boolean(activeSetupProject)}
               showNewModal={showNewDiaryModal}
               onSetShowNewModal={setShowNewDiaryModal}
               onAddEntry={handleAddDiaryEntry}
             />
           )}
 
-          {activeProject && activeScreen === "ia" && (
+          {activeEcolarProject && activeScreen === "ia" && (
             <AiEngineerScreen
-              key={activeProject.id}
-              state={activeProject}
-              messages={activeProject.chatMessages}
+              key={activeEcolarProject.id}
+              state={activeEcolarProject}
+              messages={activeEcolarProject.chatMessages}
               pendingQuestion={pendingAiQuestion}
               onClearPendingQuestion={() => setPendingAiQuestion(null)}
               onAddMessage={handleAddChatMessage}
             />
           )}
 
-          {activeProject && activeScreen === "impacto" && (
+          {activeEcolarProject && activeScreen === "impacto" && (
             <ImpactPanelScreen
-              key={activeProject.id}
-              state={activeProject}
+              key={activeEcolarProject.id}
+              state={activeEcolarProject}
               totalSavings={deltaStats.totalSavings}
               totalWaterSaved={deltaStats.totalWaterSaved}
               totalCo2AvoidedKg={deltaStats.totalCo2AvoidedKg}
@@ -1320,7 +1698,14 @@ export default function App({ userId, onSignOut }: AppProps) {
               key={activeProject.id}
               expenses={activeProject.expenses}
               stageBudgets={activeProject.stageBudgets}
-              totalBudget={activeProject.profile.orcamentoTotal}
+              totalBudget={
+                activeEcolarProject?.profile.orcamentoTotal ??
+                (activeSetupProject?.planning.respostas.orcamentoDisponivel
+                  ?.status === "respondido"
+                  ? activeSetupProject.planning.respostas.orcamentoDisponivel.value
+                  : null)
+              }
+              isProjectSetup={Boolean(activeSetupProject)}
               onAddExpense={handleAddExpense}
             />
           )}
@@ -1329,15 +1714,16 @@ export default function App({ userId, onSignOut }: AppProps) {
             <AlertsScreen
               key={activeProject.id}
               alerts={activeProject.alerts}
+              isProjectSetup={Boolean(activeSetupProject)}
               onToggleResolve={handleToggleAlert}
               onAskAi={handleAskAi}
             />
           )}
 
-          {activeProject && activeScreen === "perfil" && (
+          {activeEcolarProject && activeScreen === "perfil" && (
             <ProfileScreen
-              key={activeProject.id}
-              profile={activeProject.profile}
+              key={activeEcolarProject.id}
+              profile={activeEcolarProject.profile}
               onSaveProfile={handleSaveProfile}
               onResetDemo={handleResetDemo}
             />
