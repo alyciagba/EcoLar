@@ -1,9 +1,11 @@
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { Leaf, Loader2, LogOut, LockKeyhole, Mail, UserRound } from "lucide-react";
+import { Leaf, Loader2, LockKeyhole, Mail, UserRound } from "lucide-react";
 import { supabase } from "../lib/supabase";
 
 type AuthMode = "login" | "signup";
+
+const App = lazy(() => import("../App"));
 
 function getAuthErrorMessage(error: { message: string }): string {
   const message = error.message.toLowerCase();
@@ -25,13 +27,6 @@ function getAuthErrorMessage(error: { message: string }): string {
   }
 
   return "Não foi possível concluir a autenticação. Tente novamente.";
-}
-
-function getDisplayName(session: Session): string {
-  const name = session.user.user_metadata?.name;
-  return typeof name === "string" && name.trim()
-    ? name
-    : session.user.email ?? "usuário";
 }
 
 export function AuthGate() {
@@ -138,11 +133,12 @@ export function AuthGate() {
       if (error) throw error;
       setSession(null);
     } catch (error) {
-      setErrorMessage(
+      const message =
         error instanceof Error
           ? getAuthErrorMessage(error)
-          : "Não foi possível encerrar sua sessão. Tente novamente."
-      );
+          : "Não foi possível encerrar sua sessão. Tente novamente.";
+      setErrorMessage(message);
+      throw new Error(message);
     } finally {
       setIsSubmitting(false);
     }
@@ -171,41 +167,22 @@ export function AuthGate() {
 
   if (session) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-8 text-slate-900 dark:bg-slate-950 dark:text-slate-100 sm:px-6 sm:py-12">
-        <section className="my-auto w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-10">
-          <div className="mb-8 flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-700 text-white dark:bg-emerald-600">
-              <Leaf className="h-5 w-5" />
+      <Suspense
+        fallback={
+          <main className="flex min-h-screen items-center justify-center bg-slate-50 text-slate-700 dark:bg-slate-950 dark:text-slate-200">
+            <div className="flex items-center gap-3" role="status" aria-live="polite">
+              <Loader2 className="h-5 w-5 animate-spin text-emerald-700 dark:text-emerald-400" />
+              <span>Abrindo o EcoLar...</span>
             </div>
-            <span className="font-display text-xl font-bold tracking-tight">EcoLar</span>
-          </div>
-          <h1 className="text-2xl font-bold">Conta conectada</h1>
-          <p className="mt-3 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-            Olá, {getDisplayName(session)}. Sua sessão está ativa.
-          </p>
-          <p className="mt-5 rounded-lg bg-emerald-50 p-4 text-sm leading-relaxed text-emerald-950 dark:bg-emerald-950/40 dark:text-emerald-100 sm:p-5">
-            As obras estão temporariamente ocultas até a próxima etapa, quando a persistência individual for conectada. Seus dados locais não serão exibidos nesta sessão.
-          </p>
-          {errorMessage && (
-            <p className="mt-5 rounded-lg bg-red-50 p-4 text-sm leading-relaxed text-red-800 dark:bg-red-950/40 dark:text-red-200" role="alert">
-              {errorMessage}
-            </p>
-          )}
-          <button
-            type="button"
-            onClick={handleSignOut}
-            disabled={isSubmitting}
-            className="mt-7 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-emerald-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-emerald-600 dark:hover:bg-emerald-500"
-          >
-            {isSubmitting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <LogOut className="h-4 w-4" />
-            )}
-            Sair da conta
-          </button>
-        </section>
-      </main>
+          </main>
+        }
+      >
+        <App
+          key={session.user.id}
+          userId={session.user.id}
+          onSignOut={handleSignOut}
+        />
+      </Suspense>
     );
   }
 

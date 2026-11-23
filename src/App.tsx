@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
   Bell,
@@ -10,6 +10,8 @@ import {
   LayoutDashboard,
   Leaf,
   ListChecks,
+  LogOut,
+  Loader2,
   Menu,
   MessageSquare,
   Moon,
@@ -38,6 +40,13 @@ import {
   ThemePreference,
 } from "./types/ecolar";
 import { generateDiaryAutoSummary } from "./utils/formatters";
+import {
+  createUserProject,
+  deleteUserProject,
+  loadUserProjects,
+  ProjectConflictError,
+  updateUserProject,
+} from "./lib/projectsRepository";
 import { DashboardScreen } from "./components/DashboardScreen";
 import { MyProjectsScreen } from "./components/MyProjectsScreen";
 import { DiagnosisScreen } from "./components/DiagnosisScreen";
@@ -51,13 +60,22 @@ import { AlertsScreen } from "./components/AlertsScreen";
 import { ProfileScreen } from "./components/ProfileScreen";
 import { SettingsScreen } from "./components/SettingsScreen";
 
-const MULTI_STORAGE_KEY = "ecolar_multi_projects_v2";
-const LEGACY_STORAGE_KEY = "ecolar_app_state_v1";
 const THEME_STORAGE_KEY = "ecolar_theme_preference_v1";
 
 interface MultiProjectStore {
   activeProjectId: string;
   projects: EcolarState[];
+}
+
+type ProjectSaveOperation =
+  | { kind: "create"; project: EcolarState }
+  | { kind: "update"; apply: (project: EcolarState) => EcolarState }
+  | { kind: "delete" };
+
+interface SaveStatus {
+  state: "saving" | "error";
+  message?: string;
+  requiresReload?: boolean;
 }
 
 const NAV_GROUPS: Array<{
@@ -120,51 +138,29 @@ function loadInitialTheme(): ThemePreference {
   return "claro";
 }
 
-function loadInitialStore(): MultiProjectStore {
-  try {
-    const savedMulti = localStorage.getItem(MULTI_STORAGE_KEY);
-    if (savedMulti) {
-      const parsed = JSON.parse(savedMulti) as MultiProjectStore;
-      if (Array.isArray(parsed.projects)) {
-        const normalized = parsed.projects.map((p, idx) => ({
-          ...p,
-          id: p.id || `obra-migrada-${idx}`,
-          status: p.status || "em_andamento",
-        }));
-        const activeId =
-          normalized.find((p) => p.id === parsed.activeProjectId)?.id ??
-          normalized[0]?.id ??
-          "";
-        return { activeProjectId: activeId, projects: normalized };
-      }
-    }
-
-    const legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
-    if (legacyRaw) {
-      const legacy = JSON.parse(legacyRaw) as Partial<EcolarState>;
-      const migrated: EcolarState = {
-        ...INITIAL_ECOLAR_STATE,
-        ...legacy,
-        id: legacy.id || INITIAL_ECOLAR_STATE.id,
-        status: legacy.status || "em_andamento",
-      };
-      return {
-        activeProjectId: migrated.id,
-        projects: [migrated],
-      };
-    }
-  } catch {
-    // ignore localStorage read errors
-  }
-
-  return {
-    activeProjectId: INITIAL_ECOLAR_STATE.id,
-    projects: [INITIAL_ECOLAR_STATE],
-  };
+interface AppProps {
+  userId: string;
+  onSignOut: () => Promise<void>;
 }
 
-export default function App() {
-  const [store, setStore] = useState<MultiProjectStore>(loadInitialStore);
+export default function App({ userId, onSignOut }: AppProps) {
+  const [store, setStore] = useState<MultiProjectStore>({
+    activeProjectId: "",
+    projects: [],
+  });
+  const storeRef = useRef(store);
+  const [isLoadingProjects, setIsLoadingProjects] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [saveStatuses, setSaveStatuses] = useState<Record<string, SaveStatus>>({});
+  const [signOutError, setSignOutError] = useState<string | null>(null);
+  const queuesRef = useRef(new Map<string, ProjectSaveOperation[]>());
+  const processingProjectsRef = useRef(new Set<string>());
+  const requestControllerRef = useRef<AbortController | null>(null);
+  const sessionVersionRef = useRef(0);
+  const sessionReadyRef = useRef(false);
+  const sessionActiveRef = useRef(false);
+  const updatedAtByProjectRef = useRef(new Map<string, string>());
   const [themePreference, setThemePreference] = useState<ThemePreference>(loadInitialTheme);
   const [systemDark, setSystemDark] = useState<boolean>(() => {
     if (typeof window !== "undefined" && window.matchMedia) {
@@ -176,6 +172,11 @@ export default function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showNewDiaryModal, setShowNewDiaryModal] = useState(false);
   const [pendingAiQuestion, setPendingAiQuestion] = useState<string | null>(null);
+
+  const replaceStore = (nextStore: MultiProjectStore) => {
+    storeRef.current = nextStore;
+    setStore(nextStore);
+  };
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) return;
@@ -209,12 +210,69 @@ export default function App() {
   };
 
   useEffect(() => {
-    try {
-      localStorage.setItem(MULTI_STORAGE_KEY, JSON.stringify(store));
-    } catch {
-      // ignore localStorage write errors
-    }
-  }, [store]);
+    const version = sessionVersionRef.current + 1;
+    sessionVersionRef.current = version;
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+    sessionActiveRef.current = true;
+    sessionReadyRef.current = false;
+    queuesRef.current.clear();
+    processingProjectsRef.current.clear();
+    updatedAtByProjectRef.current.clear();
+    replaceStore({ activeProjectId: "", projects: [] });
+    setSaveStatuses({});
+    setLoadError(null);
+    setIsLoadingProjects(true);
+
+    void loadUserProjects(userId, controller.signal)
+      .then((loadedProjects) => {
+        if (
+          controller.signal.aborted ||
+          sessionVersionRef.current !== version ||
+          !sessionActiveRef.current
+        ) {
+          return;
+        }
+        const projects = loadedProjects.map(({ project }) => project);
+        updatedAtByProjectRef.current = new Map(
+          loadedProjects.map(({ project, updatedAt }) => [project.id, updatedAt])
+        );
+        replaceStore({
+          activeProjectId: projects[0]?.id ?? "",
+          projects,
+        });
+        sessionReadyRef.current = true;
+        setIsLoadingProjects(false);
+      })
+      .catch(() => {
+        if (
+          controller.signal.aborted ||
+          sessionVersionRef.current !== version ||
+          !sessionActiveRef.current
+        ) {
+          return;
+        }
+        setLoadError(
+          "Não foi possível carregar suas obras. Verifique sua conexão e tente novamente."
+        );
+        setIsLoadingProjects(false);
+      });
+
+    return () => {
+      sessionActiveRef.current = false;
+      sessionReadyRef.current = false;
+      controller.abort();
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
+      }
+      if (sessionVersionRef.current === version) {
+        sessionVersionRef.current += 1;
+      }
+      queuesRef.current.clear();
+      processingProjectsRef.current.clear();
+      updatedAtByProjectRef.current.clear();
+    };
+  }, [userId, loadAttempt]);
 
   const activeProject = useMemo(() => {
     return (
@@ -278,19 +336,209 @@ export default function App() {
     ? activeProject.alerts.filter((a) => !a.resolvido).length
     : 0;
 
+  const processProjectQueue = async (projectId: string) => {
+    if (
+      processingProjectsRef.current.has(projectId) ||
+      !sessionReadyRef.current ||
+      !sessionActiveRef.current
+    ) {
+      return;
+    }
+
+    const queue = queuesRef.current.get(projectId);
+    const controller = requestControllerRef.current;
+    if (!queue?.length || !controller) return;
+
+    const version = sessionVersionRef.current;
+    processingProjectsRef.current.add(projectId);
+
+    try {
+      while (
+        queue.length > 0 &&
+        !controller.signal.aborted &&
+        sessionVersionRef.current === version &&
+        sessionActiveRef.current
+      ) {
+        const operation = queue[0];
+        const currentProject = storeRef.current.projects.find(
+          (project) => project.id === projectId
+        );
+        let nextStore: MultiProjectStore;
+
+        if (operation.kind === "create") {
+          const updatedAt = await createUserProject(
+            userId,
+            operation.project,
+            controller.signal
+          );
+          updatedAtByProjectRef.current.set(operation.project.id, updatedAt);
+          nextStore = {
+            activeProjectId: operation.project.id,
+            projects: [
+              operation.project,
+              ...storeRef.current.projects.filter(
+                (project) => project.id !== operation.project.id
+              ),
+            ],
+          };
+        } else if (operation.kind === "update") {
+          if (!currentProject) {
+            throw new Error("A obra não está mais disponível nesta sessão.");
+          }
+          const updatedProject = operation.apply(currentProject);
+          const expectedUpdatedAt =
+            updatedAtByProjectRef.current.get(projectId);
+          if (!expectedUpdatedAt) {
+            throw new Error("A data de atualização da obra não está disponível.");
+          }
+          const updatedAt = await updateUserProject(
+            userId,
+            updatedProject,
+            expectedUpdatedAt,
+            controller.signal
+          );
+          updatedAtByProjectRef.current.set(projectId, updatedAt);
+          nextStore = {
+            ...storeRef.current,
+            projects: storeRef.current.projects.map((project) =>
+              project.id === projectId ? updatedProject : project
+            ),
+          };
+        } else {
+          const expectedUpdatedAt =
+            updatedAtByProjectRef.current.get(projectId);
+          if (!expectedUpdatedAt) {
+            throw new Error("A data de atualização da obra não está disponível.");
+          }
+          await deleteUserProject(
+            userId,
+            projectId,
+            expectedUpdatedAt,
+            controller.signal
+          );
+          updatedAtByProjectRef.current.delete(projectId);
+          const remainingProjects = storeRef.current.projects.filter(
+            (project) => project.id !== projectId
+          );
+          nextStore = {
+            activeProjectId:
+              storeRef.current.activeProjectId === projectId
+                ? remainingProjects[0]?.id ?? ""
+                : storeRef.current.activeProjectId,
+            projects: remainingProjects,
+          };
+        }
+
+        if (
+          controller.signal.aborted ||
+          sessionVersionRef.current !== version ||
+          !sessionActiveRef.current
+        ) {
+          return;
+        }
+
+        replaceStore(nextStore);
+        queue.shift();
+        if (queue.length === 0) {
+          queuesRef.current.delete(projectId);
+          setSaveStatuses((previous) => {
+            const next = { ...previous };
+            delete next[projectId];
+            return next;
+          });
+        } else {
+          setSaveStatuses((previous) => ({
+            ...previous,
+            [projectId]: { state: "saving" },
+          }));
+        }
+      }
+    } catch (error) {
+      if (
+        !controller.signal.aborted &&
+        sessionVersionRef.current === version &&
+        sessionActiveRef.current
+      ) {
+        const failedOperation = queue[0];
+        const isConflict = error instanceof ProjectConflictError;
+        const message = isConflict
+          ? "Esta obra foi alterada em outra sessão. Esta alteração não foi salva; atualize as obras e aplique-a novamente."
+          : failedOperation?.kind === "create"
+            ? "Não foi possível criar a obra. Ela ainda não foi salva; tente novamente."
+            : failedOperation?.kind === "delete"
+              ? "Não foi possível excluir a obra. Ela continua salva; tente novamente."
+              : "Não foi possível salvar as alterações da obra. Os dados anteriores continuam salvos; tente novamente.";
+        setSaveStatuses((previous) => ({
+          ...previous,
+          [projectId]: {
+            state: "error",
+            message,
+            requiresReload: isConflict,
+          },
+        }));
+      }
+    } finally {
+      processingProjectsRef.current.delete(projectId);
+    }
+  };
+
+  const enqueueProjectOperation = (
+    projectId: string,
+    operation: ProjectSaveOperation
+  ) => {
+    if (!sessionReadyRef.current || !sessionActiveRef.current) return;
+    const queue = queuesRef.current.get(projectId) ?? [];
+    queue.push(operation);
+    queuesRef.current.set(projectId, queue);
+    setSaveStatuses((previous) => ({
+      ...previous,
+      [projectId]: { state: "saving" },
+    }));
+    void processProjectQueue(projectId);
+  };
+
+  const retryFailedSaves = () => {
+    const failedIds = Object.entries(saveStatuses)
+      .filter(
+        ([, saveStatus]) =>
+          saveStatus.state === "error" && !saveStatus.requiresReload
+      )
+      .map(([projectId]) => projectId);
+
+    for (const projectId of failedIds) {
+      setSaveStatuses((previous) => ({
+        ...previous,
+        [projectId]: { state: "saving" },
+      }));
+      void processProjectQueue(projectId);
+    }
+  };
+
+  const handleAppSignOut = async () => {
+    setSignOutError(null);
+    if (
+      processingProjectsRef.current.size > 0 ||
+      Object.values(saveStatuses).some((status) => status.state === "saving")
+    ) {
+      setSignOutError("Aguarde a conclusão do salvamento antes de sair da conta.");
+      return;
+    }
+
+    try {
+      await onSignOut();
+    } catch {
+      setSignOutError("Não foi possível encerrar a sessão. Tente novamente.");
+    }
+  };
+
   const updateActiveProject = (updater: (prev: EcolarState) => EcolarState) => {
-    setStore((prevStore) => {
-      const targetId =
-        prevStore.projects.find((p) => p.id === prevStore.activeProjectId)?.id ??
-        prevStore.projects[0]?.id;
-      if (!targetId) return prevStore;
-      return {
-        ...prevStore,
-        projects: prevStore.projects.map((p) =>
-          p.id === targetId ? updater(p) : p
-        ),
-      };
-    });
+    const currentStore = storeRef.current;
+    const projectId =
+      currentStore.projects.find(
+        (project) => project.id === currentStore.activeProjectId
+      )?.id ?? currentStore.projects[0]?.id;
+    if (!projectId) return;
+    enqueueProjectOperation(projectId, { kind: "update", apply: updater });
   };
 
   const handleNavigate = (screen: ScreenId) => {
@@ -520,28 +768,25 @@ export default function App() {
   const handleSwitchProject = (projectId: string) => {
     setPendingAiQuestion(null);
     setShowNewDiaryModal(false);
-    setStore((prev) => ({
-      ...prev,
+    replaceStore({
+      ...storeRef.current,
       activeProjectId: projectId,
-    }));
+    });
   };
 
   const handleSelectAndOpenDashboard = (projectId: string) => {
     setPendingAiQuestion(null);
     setShowNewDiaryModal(false);
-    setStore((prev) => ({
-      ...prev,
+    replaceStore({
+      ...storeRef.current,
       activeProjectId: projectId,
-    }));
+    });
     setActiveScreen("dashboard");
   };
 
   const handleCreateProject = (input: NewProjectInput) => {
     const created = createNewProjectState(input);
-    setStore((prev) => ({
-      activeProjectId: created.id,
-      projects: [created, ...prev.projects],
-    }));
+    enqueueProjectOperation(created.id, { kind: "create", project: created });
   };
 
   const handleUpdateProjectInfo = (
@@ -549,59 +794,107 @@ export default function App() {
     profile: ProjectProfile,
     status: ProjectStatus
   ) => {
-    setStore((prev) => ({
-      ...prev,
-      projects: prev.projects.map((p) =>
-        p.id === projectId
-          ? {
-              ...p,
-              status,
-              profile: {
-                ...profile,
-                progressoGeral:
-                  status === "concluida" ? 100 : profile.progressoGeral,
-              },
-            }
-          : p
-      ),
-    }));
+    enqueueProjectOperation(projectId, {
+      kind: "update",
+      apply: (project) => ({
+        ...project,
+        status,
+        profile: {
+          ...profile,
+          progressoGeral:
+            status === "concluida" ? 100 : profile.progressoGeral,
+        },
+      }),
+    });
   };
 
   const handleChangeProjectStatus = (
     projectId: string,
     status: ProjectStatus
   ) => {
-    setStore((prev) => ({
-      ...prev,
-      projects: prev.projects.map((p) =>
-        p.id === projectId
-          ? {
-              ...p,
-              status,
-              profile: {
-                ...p.profile,
-                progressoGeral:
-                  status === "concluida" ? 100 : p.profile.progressoGeral,
-              },
-            }
-          : p
-      ),
-    }));
+    enqueueProjectOperation(projectId, {
+      kind: "update",
+      apply: (project) => ({
+        ...project,
+        status,
+        profile: {
+          ...project.profile,
+          progressoGeral:
+            status === "concluida" ? 100 : project.profile.progressoGeral,
+        },
+      }),
+    });
   };
 
   const handleDeleteProject = (projectId: string) => {
-    setStore((prev) => {
-      const remaining = prev.projects.filter((p) => p.id !== projectId);
-      const nextActive =
-        prev.activeProjectId === projectId
-          ? remaining[0]?.id ?? ""
-          : prev.activeProjectId;
-      return {
-        activeProjectId: nextActive,
-        projects: remaining,
-      };
-    });
+    enqueueProjectOperation(projectId, { kind: "delete" });
   };
+
+  const isSaving = Object.values(saveStatuses).some(
+    (status) => status.state === "saving"
+  );
+  const saveError = Object.values(saveStatuses).find(
+    (status) => status.state === "error"
+  )?.message;
+  const hasConflicts = Object.values(saveStatuses).some(
+    (status) => status.state === "error" && status.requiresReload
+  );
+
+  if (isLoadingProjects) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 text-slate-700 dark:bg-slate-950 dark:text-slate-200">
+        <div className="flex flex-col items-center gap-5">
+          <div className="flex items-center gap-3" role="status" aria-live="polite">
+            <Loader2 className="h-5 w-5 animate-spin text-emerald-700 dark:text-emerald-400" />
+            <span>Carregando suas obras...</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleAppSignOut()}
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            <LogOut className="h-4 w-4" />
+            Sair da conta
+          </button>
+          {signOutError && (
+            <p className="max-w-md text-center text-sm text-red-700 dark:text-red-300" role="alert">
+              {signOutError}
+            </p>
+          )}
+        </div>
+      </main>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-10 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+        <section className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-9">
+          <h1 className="text-xl font-bold">Não foi possível abrir suas obras</h1>
+          <p className="mt-3 text-sm leading-relaxed text-slate-600 dark:text-slate-400" role="alert">
+            {loadError}
+          </p>
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+            <button
+              type="button"
+              onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+              className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-emerald-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800 dark:bg-emerald-600 dark:hover:bg-emerald-500"
+            >
+              Tentar novamente
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleAppSignOut()}
+              className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              <LogOut className="h-4 w-4" />
+              Sair da conta
+            </button>
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex">
@@ -858,7 +1151,18 @@ export default function App() {
             </button>
           </nav>
 
-          <div className="shrink-0">
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void handleAppSignOut()}
+              disabled={isSaving}
+              aria-label="Sair da conta"
+              title={isSaving ? "Aguarde o salvamento antes de sair" : "Sair da conta"}
+              className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 sm:px-3"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Sair</span>
+            </button>
             <button
               type="button"
               onClick={handleOpenNewDiary}
@@ -873,6 +1177,44 @@ export default function App() {
 
         {/* Conteúdo da tela ativa */}
         <main className="flex-1 w-full max-w-[1200px] mx-auto px-4 sm:px-8 py-6 sm:py-8">
+          {signOutError && (
+            <p className="mb-5 rounded-lg bg-red-50 p-4 text-sm leading-relaxed text-red-800 dark:bg-red-950/40 dark:text-red-200" role="alert">
+              {signOutError}
+            </p>
+          )}
+          {isSaving && (
+            <p className="mb-5 flex items-center gap-2 rounded-lg bg-slate-100 p-4 text-sm text-slate-700 dark:bg-slate-900 dark:text-slate-200" role="status" aria-live="polite">
+              <Loader2 className="h-4 w-4 animate-spin text-emerald-700 dark:text-emerald-400" />
+              Salvando alterações no Supabase...
+            </p>
+          )}
+          {saveError && (
+            <div className="mb-5 flex flex-col gap-3 rounded-lg bg-red-50 p-4 text-sm text-red-800 dark:bg-red-950/40 dark:text-red-200 sm:flex-row sm:items-center sm:justify-between">
+              <p role="alert">{saveError}</p>
+              <div className="flex shrink-0 gap-2">
+                {hasConflicts && (
+                  <button
+                    type="button"
+                    onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+                    className="inline-flex min-h-9 items-center justify-center rounded-lg border border-red-300 px-3 py-2 text-xs font-semibold transition hover:bg-red-100 dark:border-red-800 dark:hover:bg-red-950"
+                  >
+                    Atualizar obras
+                  </button>
+                )}
+                {Object.values(saveStatuses).some(
+                  (status) => status.state === "error" && !status.requiresReload
+                ) && (
+                  <button
+                    type="button"
+                    onClick={retryFailedSaves}
+                    className="inline-flex min-h-9 items-center justify-center rounded-lg border border-red-300 px-3 py-2 text-xs font-semibold transition hover:bg-red-100 dark:border-red-800 dark:hover:bg-red-950"
+                  >
+                    Tentar novamente
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
           {activeScreen === "configuracoes" && (
             <SettingsScreen
               themePreference={themePreference}

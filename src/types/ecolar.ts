@@ -224,3 +224,18 @@ export interface EcolarState {
   baseWasteDivertedKg: number;
   baseReusedMaterialsKg: number;
 }
+
+export interface ProjectRecord {
+  id: string;
+  user_id: string;
+  name: string;
+  status: string;
+  data: unknown;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LoadedProject {
+  project: EcolarState;
+  updatedAt: string;
+}
