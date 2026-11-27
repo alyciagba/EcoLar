@@ -1,0 +1,241 @@
+export type ScreenId =
+  | "dashboard"
+  | "obras"
+  | "diagnostico"
+  | "melhorias"
+  | "assistente"
+  | "diario"
+  | "ia"
+  | "impacto"
+  | "gastos"
+  | "alertas"
+  | "perfil"
+  | "configuracoes";
+
+export type ThemePreference = "claro" | "escuro" | "automatico";
+
+export type ProjectStatus = "em_andamento" | "pausada" | "concluida";
+
+export type WorkType = "construcao" | "reforma" | "ampliacao" | "regularizacao";
+
+export type MainGoal =
+  | "economizar"
+  | "reduzir_impacto"
+  | "conforto_termico"
+  | "acelerar_obra"
+  | "evitar_desperdicio";
+
+export type SocialPriority =
+  | "menor_custo"
+  | "durabilidade"
+  | "conforto"
+  | "acessibilidade"
+  | "sustentabilidade";
+
+export interface ProjectProfile {
+  nomeObra: string;
+  endereco: string;
+  cidade: string;
+  uf: string;
+  tipoObra: WorkType;
+  climaRegiao: string;
+  metragem: number;
+  tipoTerreno: string;
+  orcamentoTotal: number;
+  rendaFamilia: string;
+  objetivoPrincipal: MainGoal;
+  materiaisDefinidos: string;
+  etapaAtual: string;
+  progressoGeral: number;
+  possuiProjetoArquitetonico: "sim_completo" | "basico" | "nao";
+  acessoInfraestrutura: {
+    agua: boolean;
+    energia: boolean;
+    saneamento: boolean;
+  };
+  prioridadeSocial: SocialPriority;
+  dataInicio: string;
+  previsaoConclusao: string;
+  pessoasBeneficiadas: number;
+}
+
+export interface DiagnosisRisk {
+  titulo: string;
+  nivel: "alto" | "medio" | "baixo";
+  explicacao: string;
+}
+
+export interface DiagnosisResult {
+  notaSustentabilidade: number;
+  notaEconomia: number;
+  notaEficienciaEnergetica: number;
+  custoEstimadoMin: number;
+  custoEstimadoMax: number;
+  desperdicioEstimadoPercentual: number;
+  economiaPotencialEstimada: number;
+  resumoDiagnostico: string;
+  oportunidadesCusto: number;
+  solucoesConforto: number;
+  principaisRiscos: DiagnosisRisk[];
+  atualizadoEm: string;
+}
+
+export type DifficultyLevel = "Facil" | "Media" | "Tecnica";
+export type PriorityLevel = "Alta" | "Media" | "Baixa";
+export type ImpactLevel = "Alto" | "Medio";
+
+export interface ImprovementItem {
+  id: string;
+  nome: string;
+  custoEstimado: number;
+  economiaEstimada: number;
+  impactoAmbiental: ImpactLevel;
+  impactoResumo: string;
+  co2EvitadoKg: number;
+  aguaEconomizadaLitros: number;
+  residuosEvitadosKg: number;
+  dificuldade: DifficultyLevel;
+  prioridade: PriorityLevel;
+  prazoIdeal: string;
+  explicacaoSimples: string;
+  categoria: "Agua" | "Conforto Termico" | "Materiais" | "Gestao";
+  adicionadaAoPlano: boolean;
+}
+
+export type AssistantItemType =
+  | "clima"
+  | "compra"
+  | "desperdicio"
+  | "tarefa"
+  | "economia"
+  | "sustentabilidade"
+  | "lembrete"
+  | "decisao";
+
+export interface AssistantTask {
+  id: string;
+  tipo: AssistantItemType;
+  titulo: string;
+  mensagem: string;
+  etapaRelacionada: string;
+  status: "pendente" | "feito" | "adiado";
+  prioridade: PriorityLevel;
+}
+
+export interface DiaryEntry {
+  id: string;
+  data: string;
+  etapaConcluida: string;
+  materiaisComprados: string;
+  quantidadeMateriais: string;
+  valorGasto: number;
+  maoDeObra: string;
+  problemasEncontrados: string;
+  desperdicioPercebido: "Nenhum relevante" | "Baixo" | "Medio" | "Alto";
+  climaDoDia: "Ensolarado" | "Nublado" | "Chuvoso" | "Vento forte";
+  observacoes: string;
+  fotoUrl?: string;
+  resumoAutomatico: string;
+}
+
+export interface ExpenseItem {
+  id: string;
+  data: string;
+  material: string;
+  fornecedor: string;
+  valorPago: number;
+  quantidade: number;
+  unidade: string;
+  categoria: "Estrutura" | "Alvenaria" | "Impermeabilizacao" | "Cobertura" | "Hidraulica e Eletrica" | "Acabamento";
+  etapa: string;
+  riscoDesperdicioAlto?: boolean;
+}
+
+export interface StageBudget {
+  etapa: string;
+  previsto: number;
+  realizado: number;
+}
+
+export type AlertType =
+  | "risco_desperdicio"
+  | "clima"
+  | "compra"
+  | "orcamento"
+  | "etapa_atrasada"
+  | "oportunidade_economia"
+  | "decisao_sustentavel"
+  | "problema_tecnico";
+
+export interface AlertItem {
+  id: string;
+  tipo: AlertType;
+  titulo: string;
+  gravidade: "alta" | "media" | "baixa";
+  explicacao: string;
+  acaoRecomendada: string;
+  resolvido: boolean;
+  dataCriacao: string;
+}
+
+export interface StructuredEngineerReply {
+  resumo: string;
+  recomendacao: string;
+  motivo: string;
+  impactoCusto: string;
+  impactoAmbiental: string;
+  cuidadosTecnicos: string;
+  quandoChamarProfissional: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  structured?: StructuredEngineerReply;
+  timestamp: string;
+  isError?: boolean;
+}
+
+export interface WeeklyGoal {
+  id: string;
+  titulo: string;
+  concluida: boolean;
+  impactoTexto: string;
+}
+
+export interface EcolarState {
+  id: string;
+  status: ProjectStatus;
+  profile: ProjectProfile;
+  diagnosis: DiagnosisResult;
+  improvements: ImprovementItem[];
+  assistantTasks: AssistantTask[];
+  diary: DiaryEntry[];
+  expenses: ExpenseItem[];
+  stageBudgets: StageBudget[];
+  alerts: AlertItem[];
+  weeklyGoals: WeeklyGoal[];
+  chatMessages: ChatMessage[];
+  baseSavings: number;
+  baseWaterSavedLiters: number;
+  baseEnergyReductionPct: number;
+  baseCo2AvoidedKg: number;
+  baseWasteDivertedKg: number;
+  baseReusedMaterialsKg: number;
+}
+
+export interface ProjectRecord {
+  id: string;
+  user_id: string;
+  name: string;
+  status: string;
+  data: unknown;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LoadedProject {
+  project: EcolarState;
+  updatedAt: string;
+}
