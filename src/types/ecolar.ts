@@ -32,45 +32,6 @@ export type SocialPriority =
   | "acessibilidade"
   | "sustentabilidade";
 
-export type ProjectPlanningStatus =
-  | "nao_iniciado"
-  | "em_andamento"
-  | "finalizado";
-
-export type ProjectPlanningStep =
-  | "objetivo"
-  | "localizacao"
-  | "ambientes"
-  | "orcamento"
-  | "prazo"
-  | "contexto";
-
-export type ProjectPlanningAnswer<T> =
-  | { status: "respondido"; value: T }
-  | { status: "nao_sei" }
-  | { status: "adiado" };
-
-export interface ProjectPlanningLocation {
-  endereco?: string | null;
-  cidade?: string | null;
-  uf?: string | null;
-}
-
-export interface ProjectPlanningAnswers {
-  objetivo?: ProjectPlanningAnswer<MainGoal>;
-  localizacao?: ProjectPlanningAnswer<ProjectPlanningLocation>;
-  ambientes?: ProjectPlanningAnswer<string[]>;
-  orcamentoDisponivel?: ProjectPlanningAnswer<number>;
-  prazoDesejado?: ProjectPlanningAnswer<string>;
-  observacoes?: ProjectPlanningAnswer<string>;
-}
-
-export interface ProjectPlanning {
-  status: ProjectPlanningStatus;
-  etapaAtual: ProjectPlanningStep | null;
-  respostas: ProjectPlanningAnswers;
-}
-
 export interface ProjectProfile {
   nomeObra: string;
   endereco: string;
@@ -97,11 +58,6 @@ export interface ProjectProfile {
   previsaoConclusao: string;
   pessoasBeneficiadas: number;
 }
-
-export type ProjectSetupProfile = Pick<ProjectProfile, "nomeObra"> &
-  Partial<Omit<ProjectProfile, "nomeObra" | "acessoInfraestrutura">> & {
-    acessoInfraestrutura?: Partial<ProjectProfile["acessoInfraestrutura"]>;
-  };
 
 export interface DiagnosisRisk {
   titulo: string;
@@ -175,18 +131,8 @@ export interface DiaryEntry {
   valorGasto: number;
   maoDeObra: string;
   problemasEncontrados: string;
-  desperdicioPercebido:
-    | "Nao informado"
-    | "Nenhum relevante"
-    | "Baixo"
-    | "Medio"
-    | "Alto";
-  climaDoDia:
-    | "Nao informado"
-    | "Ensolarado"
-    | "Nublado"
-    | "Chuvoso"
-    | "Vento forte";
+  desperdicioPercebido: "Nenhum relevante" | "Baixo" | "Medio" | "Alto";
+  climaDoDia: "Ensolarado" | "Nublado" | "Chuvoso" | "Vento forte";
   observacoes: string;
   fotoUrl?: string;
   resumoAutomatico: string;
@@ -262,7 +208,6 @@ export interface EcolarState {
   id: string;
   status: ProjectStatus;
   profile: ProjectProfile;
-  planning?: ProjectPlanning;
   diagnosis: DiagnosisResult;
   improvements: ImprovementItem[];
   assistantTasks: AssistantTask[];
@@ -280,31 +225,6 @@ export interface EcolarState {
   baseReusedMaterialsKg: number;
 }
 
-export interface ProjectSetupState {
-  kind: "setup";
-  id: string;
-  status: ProjectStatus;
-  profile: ProjectSetupProfile;
-  planning: ProjectPlanning;
-  diagnosis: null;
-  improvements: ImprovementItem[];
-  assistantTasks: AssistantTask[];
-  diary: DiaryEntry[];
-  expenses: ExpenseItem[];
-  stageBudgets: StageBudget[];
-  alerts: AlertItem[];
-  weeklyGoals: WeeklyGoal[];
-  chatMessages: ChatMessage[];
-  baseSavings: number | null;
-  baseWaterSavedLiters: number | null;
-  baseEnergyReductionPct: number | null;
-  baseCo2AvoidedKg: number | null;
-  baseWasteDivertedKg: number | null;
-  baseReusedMaterialsKg: number | null;
-}
-
-export type ProjectState = EcolarState | ProjectSetupState;
-
 export interface ProjectRecord {
   id: string;
   user_id: string;
@@ -316,6 +236,6 @@ export interface ProjectRecord {
 }
 
 export interface LoadedProject {
-  project: ProjectState;
+  project: EcolarState;
   updatedAt: string;
 }

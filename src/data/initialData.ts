@@ -1,7 +1,6 @@
 import {
   EcolarState,
   MainGoal,
-  ProjectSetupState,
   ProjectStatus,
   SocialPriority,
   WorkType,
@@ -828,44 +827,6 @@ export function createNewProjectState(input: NewProjectInput): EcolarState {
     baseCo2AvoidedKg: 0,
     baseWasteDivertedKg: 0,
     baseReusedMaterialsKg: 0,
-  };
-}
-
-export function createProjectSetupState(nomeObra: string): ProjectSetupState {
-  const projectName = nomeObra.trim();
-  if (!projectName) {
-    throw new Error("O nome da obra é obrigatório.");
-  }
-
-  const projectId = `obra-${Date.now()}`;
-
-  return {
-    kind: "setup",
-    id: projectId,
-    status: "em_andamento",
-    profile: {
-      nomeObra: projectName,
-    },
-    planning: {
-      status: "nao_iniciado",
-      etapaAtual: "objetivo",
-      respostas: {},
-    },
-    diagnosis: null,
-    improvements: [],
-    assistantTasks: [],
-    diary: [],
-    expenses: [],
-    stageBudgets: [],
-    alerts: [],
-    weeklyGoals: [],
-    chatMessages: [],
-    baseSavings: null,
-    baseWaterSavedLiters: null,
-    baseEnergyReductionPct: null,
-    baseCo2AvoidedKg: null,
-    baseWasteDivertedKg: null,
-    baseReusedMaterialsKg: null,
   };
 }
 

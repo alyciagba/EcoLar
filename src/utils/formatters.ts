@@ -26,11 +26,9 @@ export function generateDiaryAutoSummary(entry: Omit<DiaryEntry, "id" | "resumoA
       : "Não houve compra de materiais registrada";
 
   const desperdicioTexto =
-    entry.desperdicioPercebido === "Nao informado"
-      ? "O nível de desperdício ainda não foi informado."
-      : entry.desperdicioPercebido === "Nenhum relevante"
-        ? "e não houve desperdício relevante informado."
-        : `com nível de desperdício informado como ${entry.desperdicioPercebido.toLowerCase()}.`;
+    entry.desperdicioPercebido === "Nenhum relevante"
+      ? "e não houve desperdício relevante informado."
+      : `com nível de desperdício informado como ${entry.desperdicioPercebido.toLowerCase()}.`;
 
   const problemaTexto =
     entry.problemasEncontrados.trim() &&

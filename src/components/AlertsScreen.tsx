@@ -4,7 +4,6 @@ import { AlertItem, AlertType } from "../types/ecolar";
 
 interface AlertsScreenProps {
   alerts: AlertItem[];
-  isProjectSetup: boolean;
   onToggleResolve: (id: string) => void;
   onAskAi: (question: string) => void;
 }
@@ -22,7 +21,6 @@ const ALERT_TYPE_LABELS: Record<AlertType, string> = {
 
 export function AlertsScreen({
   alerts,
-  isProjectSetup,
   onToggleResolve,
   onAskAi,
 }: AlertsScreenProps) {
@@ -50,9 +48,7 @@ export function AlertsScreen({
             Alertas da Obra
           </h1>
           <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-            {isProjectSetup
-              ? `${openCount} alertas registrados como ativos. A ausência de alertas não representa uma avaliação completa de riscos.`
-              : `${openCount} alertas ativos exigindo atenção para evitar prejuízos, atrasos ou desperdício.`}
+            {openCount} alertas ativos exigindo atenção para evitar prejuízos, atrasos ou desperdício.
           </p>
         </div>
 
@@ -107,9 +103,7 @@ export function AlertsScreen({
 
       {filtered.length === 0 ? (
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-8 text-center text-sm text-slate-600 dark:text-slate-400">
-          {isProjectSetup && alerts.length === 0
-            ? "Nenhum alerta foi registrado. A obra ainda não passou por uma avaliação de riscos."
-            : "Nenhum alerta encontrado para este filtro."}
+          Nenhum alerta encontrado para este filtro.
         </div>
       ) : (
         <div className="space-y-4">
